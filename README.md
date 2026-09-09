@@ -64,6 +64,18 @@ A Seeker or Saga with no wallet endpoint returns `false`; a stock Android handse
 
 `signAndSendTransactions` on the native client takes **no auth token** — authorization is bound to the live association session. Splitting this into two plugin methods would force the plugin to hold a `LocalAssociationScenario` open across two JavaScript round trips, leaking the local port and racing the wallet's activity result. One call, one session.
 
+## Example app
+
+`example/` is a runnable Capacitor app used to exercise the plugin on a real device. It targets **devnet** and signs a **1-lamport self-transfer**, so nothing of value moves and no third-party endpoint is involved.
+
+```bash
+cd example
+npm install
+npm run build:android   # bundle + cap sync + assembleDebug
+```
+
+It checks for a wallet on load, and before reporting success it **asserts that the authorized address is the one you entered**, aborting on a mismatch. That matters because the wallet shows an account picker: if the handset holds more than one account, a mis-tap authorizes the wrong wallet, and `authorize()` hands the public key back so this is free to check.
+
 ## Errors
 
 Rejections carry a `code`, because the entire reason to prefer MWA over a deeplink is that a deeplink cannot tell "in flight" from "failed". Collapsing every cause into one rejection would throw away the property you came for.
@@ -87,6 +99,10 @@ Payloads are decoded **before** any wallet UI is shown, so a malformed transacti
 - **The Maven group is `com.solanamobile`; the Java package is `com.solana.mobilewalletadapter.clientlib`.** Imports guessed from the coordinate will not resolve.
 - The scenario's futures block, so they must not run on the main thread, and `scenario.close()` belongs in a `finally` — an unclosed scenario leaks the local port and the next attempt then fails for a reason that looks nothing like the cause.
 - `--` is illegal inside an XML comment, and the manifest merger reports it as `Error parsing AndroidManifest.xml` with no line number. Validate the manifest before running a build.
+
+## Contact
+
+Bugs and questions are best raised as a GitHub issue. For anything that does not belong in public, email info@arkaseeker.com.
 
 ## License
 

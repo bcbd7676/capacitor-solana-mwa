@@ -28,14 +28,16 @@
     }
   },
   "scripts": {
-    "build": "npm run clean && tsc",
+    "build": "npm run clean && tsc && npm run build:cjs",
     "clean": "rimraf ./dist",
-    "verify:android": "cd android && ./gradlew clean build test && cd .."
+    "verify:android": "cd android && ./gradlew clean build test && cd ..",
+    "build:cjs": "esbuild src/index.ts --bundle --format=cjs --platform=neutral --external:@capacitor/core --outfile=dist/plugin.cjs.js"
   },
   "devDependencies": {
     "@capacitor/core": "^8.0.0",
     "rimraf": "^5.0.0",
-    "typescript": "~5.4.0"
+    "typescript": "~5.4.0",
+    "esbuild": "^0.28.0"
   },
   "peerDependencies": {
     "@capacitor/core": ">=6.0.0"

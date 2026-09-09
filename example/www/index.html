@@ -1,0 +1,34 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MWA Example</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 14px;
+         background: #0b0f14; color: #d8e2ec; }
+  h1 { font-size: 15px; margin: 0 0 4px; color: #6ee7d0; }
+  p.sub { margin: 0 0 12px; color: #8fa3b5; font-size: 12px; }
+  input { width: 100%; box-sizing: border-box; padding: 9px; margin-bottom: 8px;
+          background: #141c26; color: #d8e2ec; border: 1px solid #2a3947;
+          border-radius: 5px; font-family: ui-monospace, monospace; font-size: 12px; }
+  button { width: 100%; padding: 11px; margin-bottom: 8px; border: 0; border-radius: 5px;
+           background: #1e3a8a; color: #eaf2ff; font-size: 14px; font-weight: 600; }
+  button.primary { background: #047857; }
+  #log { margin-top: 12px; }
+  #log div { padding: 6px 8px; margin-bottom: 5px; border-radius: 4px;
+             background: #141c26; white-space: pre-wrap; word-break: break-all;
+             font-family: ui-monospace, monospace; font-size: 11px; }
+  .ok  { border-left: 4px solid #34d399; }
+  .bad { border-left: 4px solid #f87171; }
+  .inf { border-left: 4px solid #60a5fa; }
+</style>
+
+<h1>capacitor-solana-mwa example</h1>
+<p class="sub">Devnet. Signs a 1-lamport self-transfer, so nothing of value moves.</p>
+
+<input id="expected" placeholder="Throwaway wallet address (fee payer + safety check)"
+       autocapitalize="off" autocorrect="off" spellcheck="false">
+
+<button id="btn-check">1. Check for a wallet</button>
+<button id="btn-send" class="primary">2. Authorize + sign + send</button>
+
+<div id="log"></div>
+<script type="module" src="main.js"></script>

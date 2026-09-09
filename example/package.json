@@ -1,0 +1,24 @@
+{
+  "name": "capacitor-solana-mwa-example",
+  "version": "0.0.0",
+  "description": "Device test app for capacitor-solana-mwa. Devnet, dust self-transfer, no production endpoints.",
+  "main": "index.js",
+  "scripts": {
+    "bundle": "esbuild src/main.js --bundle --format=esm --outfile=www/main.js",
+    "sync": "npm run bundle && npx cap sync android",
+    "build:android": "npm run sync && cd android && ./gradlew assembleDebug"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/cli": "^8.5.1",
+    "@capacitor/core": "^8.5.1",
+    "@solana/web3.js": "^1.99.0",
+    "esbuild": "^0.28.2",
+    "capacitor-solana-mwa": "file:.."
+  },
+  "private": true
+}
