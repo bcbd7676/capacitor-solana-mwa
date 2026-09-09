@@ -1,0 +1,46 @@
+ext {
+    capacitorVersion = project.hasProperty('capacitorVersion') ? project.capacitorVersion : '8.0.0'
+    androidxAppCompatVersion = project.hasProperty('androidxAppCompatVersion') ? project.androidxAppCompatVersion : '1.7.0'
+}
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.13.0'
+    }
+}
+
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'com.arkaseeker.capacitor.mwa'
+    compileSdk 36
+    defaultConfig {
+        minSdk 24
+        targetSdk 36
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "com.capacitorjs:core:$capacitorVersion"
+
+    // >>> nv-websocket-client arrives TRANSITIVELY and at <scope>runtime</scope>, so it
+    // is ABSENT from the compile classpath. Do not conclude from a compile-classpath
+    // audit that this library has no third-party dependencies -- that transitive dep IS
+    // the entire transport, and a missing one compiles fine then NoClassDefFoundErrors
+    // on the first association. Verify with :dependencies --configuration runtimeClasspath.
+    implementation 'com.solanamobile:mobile-wallet-adapter-clientlib:2.1.0'
+}

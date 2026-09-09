@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Android 11+ package visibility. Declared HERE, in the plugin, so a consuming
+      app gets it by manifest merge and never has to discover this the hard way:
+      without it, isWalletEndpointAvailable() returns false on a device that has a
+      wallet installed, and the failure looks like "no wallet" instead of "cannot
+      see the wallet".
+
+      NOTE there is deliberately no <uses-permission android:name="android.permission.INTERNET"/>
+      and no networkSecurityConfig. The native transport is nv-websocket-client over
+      raw java.net.Socket, which never consults NetworkSecurityPolicy, so this plugin
+      needs NO cleartext-traffic exemption. That is the whole reason it exists; the
+      JS MWA libraries cannot connect from a Capacitor WebView without one.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="solana-wallet" />
+        </intent>
+    </queries>
+
+</manifest>
