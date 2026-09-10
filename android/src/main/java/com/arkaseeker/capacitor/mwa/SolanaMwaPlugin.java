@@ -28,7 +28,20 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @CapacitorPlugin(name = "SolanaMwa")
 public class SolanaMwaPlugin extends Plugin {
 
-    private static final int DEFAULT_TIMEOUT_MS = 20000;
+    // >>> 90 SECONDS, NOT 20, AND THE REASON IS A DEVICE MEASUREMENT RATHER THAN A GUESS.
+    // This value bounds BOTH the association and the wait for each JSON-RPC response,
+    // and the second of those is a HUMAN sitting in the wallet's approval screen. On
+    // Sep 10 2026 a real run failed with SIGN_FAILED "Timed out waiting for response
+    // with id=2": the session established at 19:25:53.402 and the request expired at
+    // 19:26:19.861 while the user was still reading Phantom's "this app could not be
+    // verified" warning. Authorize had already succeeded, so the association was fine;
+    // only the clock was wrong.
+    //
+    // A wallet may show a security warning, ask the user to pick an account, or require
+    // a biometric -- so anything on the order of a few seconds is a value chosen for a
+    // machine when the counterparty is a person. Callers who want the old behaviour can
+    // still pass timeoutMs explicitly.
+    private static final int DEFAULT_TIMEOUT_MS = 90000;
 
     /**
      * The scenario's futures BLOCK. They must never run on the main thread: a
@@ -63,6 +76,13 @@ public class SolanaMwaPlugin extends Plugin {
         final String identityUri = call.getString("identityUri");
         final String iconRelativeUri = call.getString("iconRelativeUri");
         final int timeoutMs = call.getInt("timeoutMs", DEFAULT_TIMEOUT_MS);
+        // OPTIONAL IN THE MWA SPEC, REQUIRED BY PHANTOM. Measured Sep 10 2026: passing
+        // null made Phantom reject sol_mwa_sign_and_send_transactions with
+        // {"code":"invalid_type","expected":"number","received":"undefined",
+        // "path":["params","minContextSlot"],"message":"Required"} -- so a spec-compliant
+        // omission is an interop failure in practice. Callers should pass the slot from
+        // getLatestBlockhashAndContext(); it is still allowed to be absent here.
+        final Integer minContextSlot = call.getInt("minContextSlot", null);
 
         if (identityUri == null || identityUri.isEmpty()) {
             call.reject("identityUri is required", "INVALID_PAYLOAD");
@@ -114,12 +134,12 @@ public class SolanaMwaPlugin extends Plugin {
         startActivityForResult(call, associationIntent, "walletResult");
 
         worker.execute(() -> runSession(call, session, scenario, payloads,
-                cluster, identityName, identityUri, iconRelativeUri));
+                cluster, identityName, identityUri, iconRelativeUri, minContextSlot));
     }
 
     private void runSession(PluginCall call, Session session, LocalAssociationScenario scenario,
                             byte[][] payloads, String cluster, String identityName,
-                            String identityUri, String iconRelativeUri) {
+                            String identityUri, String iconRelativeUri, Integer minContextSlot) {
         try {
             MobileWalletAdapterClient client = scenario.start().get();
 
@@ -133,7 +153,7 @@ public class SolanaMwaPlugin extends Plugin {
             // bound to THIS session, which is why authorize and sign live in one
             // plugin call rather than two.
             MobileWalletAdapterClient.SignAndSendTransactionsResult signed =
-                    client.signAndSendTransactions(payloads, null /* minContextSlot */).get();
+                    client.signAndSendTransactions(payloads, minContextSlot).get();
 
             JSArray signatures = new JSArray();
             if (signed.signatures != null) {

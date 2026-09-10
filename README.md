@@ -2,7 +2,9 @@
 
 Solana [Mobile Wallet Adapter](https://docs.solanamobile.com/) for [Capacitor](https://capacitorjs.com/) apps on Android.
 
-> **Status: pre-release (0.1.0). The Android library and the TypeScript API build and typecheck, and the native API is verified against the shipped `mobile-wallet-adapter-clientlib` 2.1.0 signatures. A full authorize-and-sign round trip against a real wallet has NOT yet been performed on a device. Do not put this on a money path until it has.**
+> **Status: pre-release (0.1.0). Device-proven.** A full `authorize` + `signAndSendTransactions` round trip has been completed against Phantom on a Samsung Galaxy S10 (Android 12), devnet, Sep 10 2026 — transaction [`3G3SqCPG…kKzvCp`](https://explorer.solana.com/tx/3G3SqCPGVU4YT16S4HR2AD3bUYVUMdMCvsxJsK4612wp2UjSJfXLFdVgC5fgyddSMAi9DZBSwkmCJtWXV9kKzvCp?cluster=devnet), finalized, `err: null`, confirmed by `getSignatureStatuses` rather than by the app's own report.
+>
+> **What that does and does not cover.** One wallet (Phantom), one handset, one Android version, devnet only. Seed Vault is **untested** — MWA's whole point is that the wallet is pluggable, so a pass on one is not a pass on another. There is no test suite. Treat it as working-but-young, and do not put it on a money path without testing the path you actually use.
 
 ## Why this exists
 
@@ -74,7 +76,94 @@ npm install
 npm run build:android   # bundle + cap sync + assembleDebug
 ```
 
+It has **two fields, and both are required**: an RPC endpoint and the wallet address to use as fee
+payer. The endpoint is a field rather than a baked-in default because the public devnet RPC refuses
+`localhost` origins (see Field notes), so there is no default that would work — and because an API
+key does not belong in a public repository. Both persist to `localStorage`, since typing base58 on a
+phone keyboard is where device testing goes to die.
+
+**On Windows, `npm run build:android` silently fails its gradle step** — npm runs scripts through
+`cmd.exe`, where `./gradlew` is not a command, so the sync succeeds and the build never runs and you
+install yesterday's APK. Run `cd android && ./gradlew assembleDebug` from a POSIX shell instead.
+
 It checks for a wallet on load, and before reporting success it **asserts that the authorized address is the one you entered**, aborting on a mismatch. That matters because the wallet shows an account picker: if the handset holds more than one account, a mis-tap authorizes the wrong wallet, and `authorize()` hands the public key back so this is free to check.
+
+## Field notes — four things that cost an evening
+
+All four were found bringing this plugin up on a real device on Sep 10 2026. None is documented
+anywhere I could find, and each one presents as a symptom that names the wrong culprit. They are
+listed by **symptom**, because that is what you will be searching for at midnight.
+
+### `ASSOCIATION_TIMEOUT` / `ECONNREFUSED` from a port that is definitely listening
+
+**Cause: Android Battery Saver.** MWA local association requires your app — which is now in the
+*background*, because it just launched the wallet — to hold an outbound socket to the wallet's local
+WebSocket server. Battery Saver activates the `powersave` netd firewall chain, and a backgrounded
+app's UID gets `rules=64 (REJECT_ALL)`. A firewall REJECT surfaces as `ECONNREFUSED`, which reads
+exactly like "nothing is listening".
+
+It is not subtle once you look, and it is invisible until you do:
+
+```
+19:16:48.101  Firewall rule changed: 10558-powersave-allow      ← foreground, allowed
+19:16:56.355  Firewall rule changed: 10558-powersave-default    ← backgrounded, REJECT_ALL
+19:16:56.913  Phantom: onScenarioReady                          ← wallet listening, happily
+                     34 connect attempts over 36 seconds, all refused
+```
+
+The tell that settles it in one command: `adb shell` is not subject to those chains, so it can
+connect to the very port your app cannot.
+
+```bash
+adb shell "dumpsys netpolicy | grep 'UID=<your uid>'"     # rules=64 (REJECT_ALL) is the smoking gun
+adb shell "echo | nc -w 3 127.0.0.1 <port>; echo \$?"      # 0 from shell + refused in-app = firewall
+```
+
+**This is not Capacitor-specific and not plugin-specific — it breaks any MWA app on any framework.**
+Turn Battery Saver off, or exempt your app from battery optimisation.
+
+### `TypeError: Failed to fetch` when getting a blockhash
+
+**Cause: `api.devnet.solana.com` returns 403 to any request carrying a `localhost` origin.** A
+Capacitor Android WebView's origin is exactly `https://localhost`, so the public endpoint refuses
+every Capacitor app by construction. Measured from one IP within seconds of each other:
+
+| `Origin` | result |
+| --- | --- |
+| `https://localhost` | **403** |
+| `http://localhost` | **403** |
+| `https://example.com` | 200 |
+| *(no Origin header)* | 200 |
+
+The browser converts a 403 on the CORS preflight into a bare `TypeError: Failed to fetch`, naming
+neither the status nor the cause. **Use your own RPC endpoint.** This has nothing to do with MWA —
+it bites any Capacitor app talking to Solana from JavaScript.
+
+### `SIGN_FAILED — Timed out waiting for response`, with the wallet still on screen
+
+**Cause: a timeout chosen for machines when the counterparty is a person.** This library's default
+was 20 seconds; a real approval — read a security warning, pick an account, maybe a biometric — took
+26. The default is now **90 seconds**; pass `timeoutMs` to change it.
+
+### Phantom rejects the sign request with `invalid_type` on `minContextSlot`
+
+**Cause: an interop divergence.** `min_context_slot` is **optional** in the MWA specification, and
+Phantom's schema validation makes it **required**:
+
+```json
+{ "code": "invalid_type", "expected": "number", "received": "undefined",
+  "path": ["params", "minContextSlot"], "message": "Required" }
+```
+
+So a spec-compliant omission is a failure in practice. Pass `minContextSlot` — it is
+`context.slot` from `getLatestBlockhashAndContext()`, which is why the example uses that variant
+rather than plain `getLatestBlockhash()`.
+
+### Bonus: "this app could not be verified"
+
+Expected, and not a defect. The wallet tries to verify the dApp identity against `identityUri`; the
+example declares the placeholder `https://example.com`, which hosts no association for it. Point
+`identityUri` at a domain you control to get rid of the warning.
 
 ## Errors
 

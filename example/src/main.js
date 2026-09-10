@@ -15,7 +15,21 @@ import {
 // change once the path is proven, and there is no reason to spend a real fee to
 // learn something devnet answers identically.
 const CLUSTER = 'solana:devnet';
-const RPC_URL = 'https://api.devnet.solana.com';
+// >>> THE PUBLIC DEVNET ENDPOINT DOES NOT WORK FROM A CAPACITOR APP, AND THE
+// FAILURE IS OPAQUE. api.devnet.solana.com RETURNS 403 TO ANY REQUEST CARRYING A
+// localhost ORIGIN -- measured Sep 10 2026: Origin https://localhost -> 403,
+// http://localhost -> 403, https://example.com -> 200, no Origin header -> 200,
+// all from the same IP within seconds, so it is an origin rule and not rate
+// limiting. A Capacitor Android WebView's origin is exactly https://localhost,
+// so every Capacitor app is refused by construction.
+//
+// The browser turns the 403 on the CORS preflight into "TypeError: Failed to
+// fetch", which names neither the status nor the cause and reads like a dead
+// network. Supply your own endpoint in the RPC field instead; it is kept out of
+// this source deliberately so that no API key is ever committed to a public repo.
+const DEFAULT_RPC = 'https://api.devnet.solana.com';
+const RPC_KEY = 'mwa_example_rpc';
+const ADDR_KEY = 'mwa_example_addr';
 
 const IDENTITY = {
   identityName: 'MWA Example',
@@ -28,6 +42,30 @@ const IDENTITY = {
 // ---------------------------------------------------------------------------
 const out = document.getElementById('log');
 const expectedInput = document.getElementById('expected');
+const rpcInput = document.getElementById('rpc');
+
+// Both fields persist locally, because retyping a base58 address and an endpoint
+// with an API key on a phone keyboard is where device testing actually goes to die.
+// This is a test harness, so localStorage is the right amount of machinery -- but
+// it does mean the endpoint (and any key in it) lives on the handset. Use a
+// throwaway key if that matters to you.
+try {
+  rpcInput.value = localStorage.getItem(RPC_KEY) || '';
+  expectedInput.value = localStorage.getItem(ADDR_KEY) || '';
+} catch { /* private mode or blocked storage -- the fields just start empty */ }
+
+rpcInput.addEventListener('change', () => {
+  try { localStorage.setItem(RPC_KEY, rpcInput.value.trim()); } catch {}
+});
+expectedInput.addEventListener('change', () => {
+  try { localStorage.setItem(ADDR_KEY, expectedInput.value.trim()); } catch {}
+});
+
+// Falls back to the public endpoint so the app still runs unconfigured -- it will
+// fail, but it fails with the explanation above rather than a bare TypeError.
+function rpcUrl() {
+  return rpcInput.value.trim() || DEFAULT_RPC;
+}
 
 function log(cls, msg) {
   console.log('[example] ' + msg);
@@ -96,9 +134,14 @@ document.getElementById('btn-send').addEventListener('click', async () => {
       return;
     }
 
-    log('inf', 'Fetching a recent blockhash from ' + RPC_URL + ' ...');
-    const connection = new Connection(RPC_URL, 'confirmed');
-    const { blockhash } = await connection.getLatestBlockhash('finalized');
+    log("inf", "Fetching a recent blockhash from " + rpcUrl() + " ...");
+    const connection = new Connection(rpcUrl(), "confirmed");
+    // getLatestBlockhashAndContext, NOT getLatestBlockhash: Phantom REQUIRES minContextSlot
+    // (see the plugin comment), and the slot that pairs with this blockhash is only
+    // available from the ...AndContext variant.
+    const { context: _ctx, value: _bh } = await connection.getLatestBlockhashAndContext('finalized');
+    const blockhash = _bh.blockhash;
+    const minContextSlot = _ctx.slot;
 
     // Dust self-transfer: touches no program of ours, no Firestore, no callable.
     // 1 lamport to itself, so the only real cost is the network fee.
@@ -121,6 +164,7 @@ document.getElementById('btn-send').addEventListener('click', async () => {
       cluster: CLUSTER,
       ...IDENTITY,
       payloads: [payloadBase64],
+      minContextSlot,
     });
 
     // >>> THE SAFETY ASSERTION. The wallet shows an account picker, and on a handset

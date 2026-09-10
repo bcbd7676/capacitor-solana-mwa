@@ -22,6 +22,17 @@ export interface AuthorizeAndSignOptions {
   payloads: string[];
 
   /**
+   * Slot to pass as `min_context_slot`, normally `context.slot` from
+   * `getLatestBlockhashAndContext()`.
+   *
+   * Optional in the MWA specification and REQUIRED BY PHANTOM in practice: omitting
+   * it makes Phantom reject the request with `invalid_type / expected number /
+   * received undefined` on `params.minContextSlot`. Supply it unless you have a
+   * reason not to.
+   */
+  minContextSlot?: number;
+
+  /**
    * How long to wait for the wallet to associate, in milliseconds.
    * Defaults to 20000. This is the ASSOCIATION timeout, not a signing deadline.
    */
