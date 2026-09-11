@@ -15,6 +15,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.solana.mobilewalletadapter.clientlib.protocol.MobileWalletAdapterClient;
+import com.solana.mobilewalletadapter.common.protocol.SessionProperties;
 import com.solana.mobilewalletadapter.clientlib.scenario.LocalAssociationIntentCreator;
 import com.solana.mobilewalletadapter.clientlib.scenario.LocalAssociationScenario;
 
@@ -48,11 +49,6 @@ public class SolanaMwaPlugin extends Plugin {
     // still pass timeoutMs explicitly.
     private static final int DEFAULT_TIMEOUT_MS = 90000;
 
-    // Deliberately SMALL and separate from the main deadline: this is a machine-to-machine
-    // request with no human in it, so a wallet that has not answered in this long is not
-    // going to. Spending the user's whole budget waiting for a discovery call would turn a
-    // helpful probe into the thing that causes the timeout.
-    private static final long CAPABILITIES_PROBE_SECONDS = 10;
 
     /**
      * The scenario's futures BLOCK. They must never run on the main thread: a
@@ -199,7 +195,7 @@ public class SolanaMwaPlugin extends Plugin {
             MobileWalletAdapterClient client = scenario.start().get(remaining(deadline), TimeUnit.NANOSECONDS);
 
             MobileWalletAdapterClient.AuthorizationResult auth = authorizeNegotiated(
-                    client, identityUri, iconRelativeUri, identityName, cluster, deadline);
+                    client, scenario, identityUri, iconRelativeUri, identityName, cluster, deadline);
 
             // No authToken argument on signAndSendTransactions: authorization is
             // bound to THIS session, which is why authorize and sign live in one
@@ -272,35 +268,39 @@ public class SolanaMwaPlugin extends Plugin {
      * today's behaviour, reached a few seconds later -- never a new failure mode.
      */
     private MobileWalletAdapterClient.AuthorizationResult authorizeNegotiated(
-            MobileWalletAdapterClient client, String identityUri, String iconRelativeUri,
-            String identityName, String cluster, long deadline) throws Exception {
+            MobileWalletAdapterClient client, LocalAssociationScenario scenario,
+            String identityUri, String iconRelativeUri, String identityName,
+            String cluster, long deadline) throws Exception {
 
         final Uri idUri = Uri.parse(identityUri);
         final Uri iconUri = iconRelativeUri == null ? null : Uri.parse(iconRelativeUri);
 
+        // >>> ASK THE SESSION WHAT IT NEGOTIATED. DO NOT INFER IT. <<<
+        //
+        // An earlier version of this guessed from get_capabilities, on the theory that a
+        // wallet advertising optional features is answering in 2.0 terms. MEASURED ON
+        // HARDWARE, THAT SIGNAL HAS NO DISCRIMINATING POWER AT ALL -- Phantom 26.6.0 and
+        // Seed Vault 1.16.0 return IDENTICAL capabilities (optionalFeatures=1,
+        // signAndSend=false) while negotiating OPPOSITE session versions. It cost a real
+        // regression: Phantom got the 2.0 request, which carries `chain` and no `cluster`,
+        // so it saw no network at all and defaulted to mainnet -- surfacing to the user as
+        // "this app is trying to use mainnet, but you are in testnet mode".
+        //
+        // The session itself holds the answer and needed no extra round trip. It is also
+        // the exact value the library prints to logcat, so the code and the log agree.
         boolean walletSpeaksV2 = false;
         try {
-            long probeBudget = Math.min(remaining(deadline),
-                    TimeUnit.SECONDS.toNanos(CAPABILITIES_PROBE_SECONDS));
-            MobileWalletAdapterClient.GetCapabilitiesResult caps =
-                    client.getCapabilities().get(probeBudget, TimeUnit.NANOSECONDS);
-            walletSpeaksV2 = caps.supportedOptionalFeatures != null
-                    && caps.supportedOptionalFeatures.length > 0;
-            Log.i(TAG, "get_capabilities answered: optionalFeatures="
-                    + (caps.supportedOptionalFeatures == null
-                        ? "null" : String.valueOf(caps.supportedOptionalFeatures.length))
-                    + " signAndSend=" + caps.supportsSignAndSendTransactions
+            SessionProperties props = scenario.getSession().getSessionProperties();
+            walletSpeaksV2 = props != null
+                    && props.protocolVersion == SessionProperties.ProtocolVersion.V1;
+            Log.i(TAG, "session negotiated " + (props == null ? "null" : props.protocolVersion)
                     + " -> sending the " + (walletSpeaksV2 ? "2.0 (chain)" : "legacy (cluster)")
                     + " authorize");
-        } catch (TimeoutException e) {
-            // The wallet did not answer a request that draws no UI at all. That is worth
-            // saying out loud, because it means the silence is not about the approval.
-            Log.w(TAG, "get_capabilities did not answer within " + CAPABILITIES_PROBE_SECONDS
-                    + "s -- the wallet is ignoring a NON-UI request. Falling back to the"
-                    + " legacy authorize.");
-        } catch (Exception e) {
-            Log.w(TAG, "get_capabilities failed (" + e.getClass().getSimpleName()
-                    + "), falling back to the legacy authorize", e);
+        } catch (Throwable e) {
+            // FAIL TOWARDS LEGACY, DELIBERATELY: it is the shape this plugin shipped with
+            // and the one proven against Phantom on two handsets. A wrong guess towards 2.0
+            // silently drops the network, which is worse than being refused.
+            Log.w(TAG, "could not read the negotiated session version, assuming legacy", e);
         }
 
         if (walletSpeaksV2) {

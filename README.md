@@ -172,9 +172,12 @@ was verified by reading the transaction back from the cluster rather than trusti
 
 | wallet | device | session | authorize shape it needs | round trip |
 | --- | --- | --- | --- | --- |
-| Phantom 26.6.0 | Galaxy S10, Android 12 | legacy | 1.x (`cluster`) | **yes — `3G3SqCPG…kKzvCp`** |
-| Phantom 26.6.0 | Seeker, Android 16 | legacy | 1.x (`cluster`) | **yes — `5TqugEdW…gjSm9gb`** |
-| Seed Vault wallet 1.16.0 (build 19824) | Seeker, Android 16 | **properties v1 (MWA 2.0)** | **2.0 (`chain`)** | **yes — `2RyPSqyg…mPJhM5fV`** |
+| Phantom 26.6.0 | Galaxy S10, Android 12 | legacy | 1.x (`cluster`) | yes — `3G3SqCPG…kKzvCp` (predates the negotiation change) |
+| Phantom 26.6.0 | Seeker, Android 16 | legacy | 1.x (`cluster`) | **yes — `2iCSVNJc…fdULWFg`** |
+| Seed Vault wallet 1.16.0 (build 19824) | Seeker, Android 16 | **properties v1 (MWA 2.0)** | **2.0 (`chain`)** | **yes — `5oFoCRHZ…5po4bjvV`** |
+
+The two Seeker signatures are from the SAME build, minutes apart, each verified on chain. The S10 row is
+kept because the handset is not to hand, and is labelled rather than quietly presented as current.
 
 ### The two wallets do not speak the same protocol version, and this library will not notice
 
@@ -201,11 +204,30 @@ association is healthy, the encrypted session is established, the wallet reads i
 `VISIBLE`, `HAS_DRAWN` window with your dApp showing through it undimmed, repainting at `fps=0.03` until
 somebody gives up.
 
-**So this plugin asks before it assumes.** It calls `get_capabilities` first -- the protocol's own discovery
-request, which renders NO UI and costs the user nothing -- and picks the authorize shape from the answer. If
-the probe goes unanswered within ten seconds it falls back to the legacy shape, which is the behaviour that is
-device-proven against Phantom on two handsets. **The worst case is the old behaviour a few seconds later,
-never a new failure mode.**
+**So this plugin asks the session what it negotiated, and does not infer it:**
+
+```java
+scenario.getSession().getSessionProperties().protocolVersion   // LEGACY | V1
+```
+
+`LocalAssociationScenario.getSession()` is public, costs no round trip, and is the exact value the library
+itself prints to logcat -- so the code and the log can never disagree. It fails TOWARDS legacy if that read
+throws, because a wrong guess towards 2.0 silently drops the network (see below), which is worse than being
+refused.
+
+**>>> AN EARLIER VERSION GUESSED FROM `get_capabilities` INSTEAD, ON THE THEORY THAT A WALLET ADVERTISING
+OPTIONAL FEATURES ANSWERS IN 2.0 TERMS. MEASURED ON HARDWARE, THAT SIGNAL HAS NO DISCRIMINATING POWER AT
+ALL. <<<** Both wallets return **identical** capabilities while negotiating **opposite** session versions:
+
+| wallet | session | `get_capabilities` |
+| --- | --- | --- |
+| Phantom 26.6.0 | legacy | `optionalFeatures=1, signAndSend=false` |
+| Seed Vault 1.16.0 | v1 | `optionalFeatures=1, signAndSend=false` |
+
+It cost a real regression, and the symptom is worth knowing because it names the wrong thing: **Phantom got
+the 2.0 request, which carries `chain` and no `cluster`, so it saw no network at all and defaulted to
+mainnet** -- surfacing to the user as *"this app is trying to use mainnet, but you are in testnet mode"*. A
+network error, from a protocol-version bug.
 
 ### Two gotchas that cost an evening each
 
@@ -215,11 +237,10 @@ returns a real protocol error. **THE SAME MISMATCH UNDER THE WRONG AUTHORIZE SHA
 ABOVE** -- which is almost certainly what the empty sheet always was: a dialog the wallet could not render
 because it could not interpret the request that provoked it.
 
-**>>> DO NOT GATE ON `supportsSignAndSendTransactions`. SEED VAULT REPORTS `false` AND THEN PERFORMS
-SIGN-AND-SEND SUCCESSFULLY. <<<** Measured: `get_capabilities answered: optionalFeatures=1 signAndSend=false`,
-followed by a completed `sign_and_send_transactions` and signature `2RyPSqyg…` confirmed on devnet. The
-capability flag and the behaviour disagree, so trust the behaviour. This plugin logs the capabilities and
-uses them ONLY to choose the authorize shape.
+**>>> DO NOT GATE ON `supportsSignAndSendTransactions`. *BOTH* WALLETS REPORT `false` AND *BOTH* THEN PERFORM
+SIGN-AND-SEND SUCCESSFULLY. <<<** Measured on each: `optionalFeatures=1 signAndSend=false`, followed by a
+completed `sign_and_send_transactions` and a confirmed devnet signature. The capability flag and the
+behaviour disagree, so trust the behaviour. This plugin does not read that field at all.
 
 ### A correction, kept deliberately
 
