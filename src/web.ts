@@ -3,6 +3,8 @@ import { WebPlugin } from '@capacitor/core';
 import type {
   AuthorizeAndSignOptions,
   AuthorizeAndSignResult,
+  SignMessagesOptions,
+  SignMessagesResult,
   SolanaMwaPlugin,
   WalletAvailableResult,
 } from './definitions';
@@ -19,6 +21,12 @@ import type {
 export class SolanaMwaWeb extends WebPlugin implements SolanaMwaPlugin {
   async walletAvailable(): Promise<WalletAvailableResult> {
     return { available: false };
+  }
+
+  async signMessages(_options: SignMessagesOptions): Promise<SignMessagesResult> {
+    throw this.unavailable(
+      'Mobile Wallet Adapter is Android-only. Check walletAvailable() first and fall back to your own flow.',
+    );
   }
 
   async authorizeAndSignAndSend(

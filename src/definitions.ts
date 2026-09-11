@@ -22,6 +22,20 @@ export interface AuthorizeAndSignOptions {
   payloads: string[];
 
   /**
+   * An `authToken` from a PREVIOUS result, to reuse that authorization.
+   *
+   * WITHOUT IT, EVERY CALL IS A FRESH AUTHORIZE FOLLOWED BY A SIGN, AND A WALLET
+   * GATES EACH BEHIND ITS OWN UNLOCK -- so signing two things in a row can mean
+   * four unlocks. Supplying it turns the pair into one prompt.
+   *
+   * Safe to store and safe to send stale: a token the wallet no longer recognises
+   * falls back to a full authorize rather than failing, because a user who
+   * disconnects the app in their wallet leaves the caller holding a value it has
+   * no way to know is dead.
+   */
+  authToken?: string;
+
+  /**
    * Slot to pass as `min_context_slot`, normally `context.slot` from
    * `getLatestBlockhashAndContext()`.
    *
@@ -59,10 +73,29 @@ export interface AuthorizeAndSignResult {
   signatures: string[];
 
   /**
-   * Auth token for a later `reauthorize`. Retained for completeness; a single
-   * call already authorizes and signs inside one session, so most callers can
-   * ignore this.
+   * Auth token for this authorization. PASS IT BACK ON THE NEXT CALL: it is what
+   * turns two wallet prompts into one. Store it per wallet, not per transaction.
    */
+  authToken: string;
+
+  /** Wallet-supplied label for the account, when it provides one. */
+  accountLabel?: string;
+}
+
+export interface SignMessagesOptions
+  extends Omit<AuthorizeAndSignOptions, 'payloads' | 'minContextSlot'> {
+  /** Messages to sign, each base64-encoded. Arbitrary bytes, not transactions. */
+  messages: string[];
+}
+
+export interface SignMessagesResult {
+  /** The authorized account's public key, base58 -- the key that signed. */
+  address: string;
+
+  /** One base58 signature per message, in the same order. Detached. */
+  signatures: string[];
+
+  /** Auth token for this authorization; pass it back to skip the connect prompt. */
   authToken: string;
 
   /** Wallet-supplied label for the account, when it provides one. */
@@ -109,6 +142,22 @@ export interface SolanaMwaPlugin {
   authorizeAndSignAndSend(
     options: AuthorizeAndSignOptions,
   ): Promise<AuthorizeAndSignResult>;
+
+  /**
+   * Sign arbitrary messages -- what a wallet-auth challenge needs.
+   *
+   * >>> THIS IS THE METHOD A SOLANA PAY DEEPLINK CANNOT PROVIDE AT ALL. <<< A
+   * deeplink carries a TRANSACTION and nothing else, so an app built on that rail
+   * cannot answer "prove you hold this key", and any service wanting a signed
+   * challenge has to be told to trust the app instead.
+   *
+   * Signatures come back DETACHED, so a verifier gets the signature itself rather
+   * than having to slice it off a combined buffer.
+   *
+   * The signing key is taken from the authorize RESULT, never from the caller: a
+   * caller-supplied address could disagree with what the wallet actually granted.
+   */
+  signMessages(options: SignMessagesOptions): Promise<SignMessagesResult>;
 
   /**
    * Whether an MWA wallet is installed. Use this to decide whether to offer the

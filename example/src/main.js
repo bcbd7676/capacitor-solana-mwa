@@ -84,6 +84,21 @@ function short(s) {
 // ---------------------------------------------------------------------------
 // 1. Capability check
 // ---------------------------------------------------------------------------
+// The auth token from the last successful call, reused on the next one. THIS IS THE
+// DIFFERENCE BETWEEN ONE WALLET PROMPT AND TWO -- without it every call is a fresh
+// authorize followed by a sign, and the wallet gates each behind its own unlock.
+//
+// Kept in memory ON PURPOSE for a test harness: persisting it would hide exactly the
+// behaviour this button exists to demonstrate, since a reload would skip the first
+// prompt and the difference would be invisible.
+// >>> KEYED BY ADDRESS, BECAUSE AN AUTH TOKEN BELONGS TO ONE WALLET AND ONE ACCOUNT.
+// Measured Sep 11 2026: a token issued by Seed Vault was presented to Phantom on the
+// next tap -- Android had shown the chooser and a different wallet was picked -- and
+// Phantom rejected it with -1/authorization request failed. That is CORRECT of Phantom.
+// The plugin falls back to a full authorize so nothing breaks, but a caller that stores
+// one token globally will pay an extra prompt every time the wallet changes.
+let lastAuth = { address: null, token: null };
+
 document.getElementById('btn-check').addEventListener('click', async () => {
   try {
     const { available } = await SolanaMwa.walletAvailable();
@@ -165,7 +180,9 @@ document.getElementById('btn-send').addEventListener('click', async () => {
       ...IDENTITY,
       payloads: [payloadBase64],
       minContextSlot,
+      ...(lastAuth.token ? { authToken: lastAuth.token } : {}),
     });
+    lastAuth = { address: res.address, token: res.authToken || null };
 
     // >>> THE SAFETY ASSERTION. The wallet shows an account picker, and on a handset
     // whose Phantom install also holds a wallet that matters, a mis-tap authorizes
@@ -211,3 +228,41 @@ document.getElementById('btn-send').addEventListener('click', async () => {
     log('bad', 'auto-check: walletAvailable threw: ' + (e && e.message ? e.message : e));
   }
 })();
+
+// ---------------------------------------------------------------------------
+// 3. Sign a message -- the wallet-auth case a Solana Pay deeplink cannot do at all.
+// Nothing is submitted and no money moves; the wallet just proves it holds the key.
+// ---------------------------------------------------------------------------
+document.getElementById('btn-sign').addEventListener('click', async () => {
+  try {
+    const { available } = await SolanaMwa.walletAvailable();
+    if (!available) {
+      log('bad', 'No wallet available -- nothing to test against.');
+      return;
+    }
+
+    // A nonce is what makes a signature proof of possession NOW rather than a replay
+    // of one captured earlier. A real verifier issues this server-side and remembers it.
+    const nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const message = 'arka-seeker wants to verify your wallet. nonce: ' + nonce;
+    const messageB64 = btoa(message);
+
+    log('inf', 'Signing: "' + message + '"');
+    if (lastAuth.token) log('inf', 'Reusing the token from ' + short(lastAuth.address) + ' -- if you pick a DIFFERENT wallet it will be rejected and re-authorize.');
+
+    const res = await SolanaMwa.signMessages({
+      cluster: CLUSTER,
+      ...IDENTITY,
+      messages: [messageB64],
+      ...(lastAuth.token ? { authToken: lastAuth.token } : {}),
+    });
+    lastAuth = { address: res.address, token: res.authToken || null };
+
+    log('ok', 'signed by ' + res.address);
+    res.signatures.forEach((s) => log('ok', 'signature: ' + s));
+    log('ok', 'MESSAGE SIGNED -- this is the call a deeplink cannot make.');
+  } catch (e) {
+    const code = e && e.code ? e.code : '(no code)';
+    log('bad', 'FAILED [' + code + '] ' + (e && e.message ? e.message : e));
+  }
+});

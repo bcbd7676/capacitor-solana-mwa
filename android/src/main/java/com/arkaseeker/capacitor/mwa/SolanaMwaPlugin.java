@@ -98,13 +98,21 @@ public class SolanaMwaPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    /**
+     * What to do with the client once a session exists and the wallet has authorized.
+     *
+     * Everything around this -- the availability check, the in-flight guard, the
+     * scenario, the intent, the deadline, the close -- is identical for every wallet
+     * interaction, and was copied once before being extracted. Only this differs.
+     */
+    private interface WalletOp {
+        void apply(MobileWalletAdapterClient client,
+                   MobileWalletAdapterClient.AuthorizationResult auth,
+                   long deadline, JSObject ret) throws Exception;
+    }
+
     @PluginMethod
     public void authorizeAndSignAndSend(PluginCall call) {
-        final String cluster = call.getString("cluster", "solana:mainnet");
-        final String identityName = call.getString("identityName", "");
-        final String identityUri = call.getString("identityUri");
-        final String iconRelativeUri = call.getString("iconRelativeUri");
-        final int timeoutMs = call.getInt("timeoutMs", DEFAULT_TIMEOUT_MS);
         // OPTIONAL IN THE MWA SPEC, REQUIRED BY PHANTOM. Measured Sep 10 2026: passing
         // null made Phantom reject sol_mwa_sign_and_send_transactions with
         // {"code":"invalid_type","expected":"number","received":"undefined",
@@ -112,11 +120,6 @@ public class SolanaMwaPlugin extends Plugin {
         // omission is an interop failure in practice. Callers should pass the slot from
         // getLatestBlockhashAndContext(); it is still allowed to be absent here.
         final Integer minContextSlot = call.getInt("minContextSlot", null);
-
-        if (identityUri == null || identityUri.isEmpty()) {
-            call.reject("identityUri is required", "INVALID_PAYLOAD");
-            return;
-        }
 
         // Decode payloads UP FRONT, before any wallet UI is shown. A malformed
         // payload should fail immediately rather than after the user has been sent
@@ -126,6 +129,89 @@ public class SolanaMwaPlugin extends Plugin {
             payloads = decodePayloads(call.getArray("payloads"));
         } catch (Exception e) {
             call.reject("payloads must be a non-empty array of base64 strings", "INVALID_PAYLOAD");
+            return;
+        }
+
+        begin(call, (client, auth, deadline, ret) -> {
+            // No authToken argument here: authorization is bound to THIS session, which
+            // is why authorize and sign live in one plugin call rather than two.
+            MobileWalletAdapterClient.SignAndSendTransactionsResult signed =
+                    client.signAndSendTransactions(payloads, minContextSlot)
+                            .get(remaining(deadline), TimeUnit.NANOSECONDS);
+            JSArray signatures = new JSArray();
+            if (signed.signatures != null) {
+                for (byte[] sig : signed.signatures) signatures.put(Base58.encode(sig));
+            }
+            ret.put("signatures", signatures);
+        });
+    }
+
+    /**
+     * Sign arbitrary messages -- the method a wallet-auth challenge needs.
+     *
+     * >>> THIS IS THE GAP THAT FORCES AN APP INTO "THE APP VOUCHES FOR ITS USERS" MODE
+     * WITH ANY SERVICE THAT WANTS A SIGNED CHALLENGE. <<< A Solana Pay deeplink can
+     * carry a TRANSACTION and nothing else, so an app built on that rail cannot answer
+     * "prove you hold this key" at all, and has to fall back to asserting it.
+     *
+     * Uses signMessagesDetached, so the signature comes back SEPARATELY rather than
+     * concatenated onto the message: a verifier wants the signature, and reconstructing
+     * it by slicing a combined buffer is a needless place to be wrong by an offset.
+     *
+     * The addresses array is the authorized account. It is taken from the authorize
+     * RESULT rather than from the caller, so the message is always signed by the key
+     * the wallet actually granted -- a caller-supplied address could disagree with it.
+     */
+    @PluginMethod
+    public void signMessages(PluginCall call) {
+        final byte[][] messages;
+        try {
+            messages = decodePayloads(call.getArray("messages"));
+        } catch (Exception e) {
+            call.reject("messages must be a non-empty array of base64 strings", "INVALID_PAYLOAD");
+            return;
+        }
+
+        begin(call, (client, auth, deadline, ret) -> {
+            final byte[][] addresses = new byte[][] { auth.publicKey };
+            MobileWalletAdapterClient.SignMessagesResult signed =
+                    client.signMessagesDetached(messages, addresses)
+                            .get(remaining(deadline), TimeUnit.NANOSECONDS);
+            JSArray signatures = new JSArray();
+            if (signed.messages != null) {
+                for (MobileWalletAdapterClient.SignMessagesResult.SignedMessage m : signed.messages) {
+                    // One signature per message, for the one address we asked for. An
+                    // empty entry would mean the wallet signed for nobody, which is a
+                    // protocol violation rather than something to paper over.
+                    if (m.signatures != null && m.signatures.length > 0) {
+                        signatures.put(Base58.encode(m.signatures[0]));
+                    }
+                }
+            }
+            if (signatures.length() != messages.length) {
+                throw new IllegalStateException("wallet returned " + signatures.length()
+                        + " signatures for " + messages.length + " messages");
+            }
+            ret.put("signatures", signatures);
+        });
+    }
+
+    /**
+     * Shared setup for every wallet interaction. Reads the common options, guards, opens
+     * the association, launches the wallet and hands the session to the worker.
+     */
+    private void begin(PluginCall call, WalletOp op) {
+        final String cluster = call.getString("cluster", "solana:mainnet");
+        final String identityName = call.getString("identityName", "");
+        final String identityUri = call.getString("identityUri");
+        final String iconRelativeUri = call.getString("iconRelativeUri");
+        final int timeoutMs = call.getInt("timeoutMs", DEFAULT_TIMEOUT_MS);
+        // An auth token from a PREVIOUS call. Supplying it turns two wallet prompts into
+        // one -- see authorizeNegotiated.
+        final String authToken = call.getString("authToken");
+
+        if (identityUri == null || identityUri.isEmpty()) {
+            call.reject("identityUri is required", "INVALID_PAYLOAD");
             return;
         }
 
@@ -173,49 +259,38 @@ public class SolanaMwaPlugin extends Plugin {
         // to turn a silent association timeout into an honest "user declined".
         startActivityForResult(call, associationIntent, "walletResult");
 
-        worker.execute(() -> runSession(call, session, scenario, payloads,
-                cluster, identityName, identityUri, iconRelativeUri, minContextSlot, timeoutMs));
+        worker.execute(() -> runSession(call, session, scenario, op,
+                cluster, identityName, identityUri, iconRelativeUri, timeoutMs, authToken));
     }
 
     private void runSession(PluginCall call, Session session, LocalAssociationScenario scenario,
-                            byte[][] payloads, String cluster, String identityName,
-                            String identityUri, String iconRelativeUri, Integer minContextSlot,
-                            int timeoutMs) {
-        // >>> ONE DEADLINE ACROSS ALL THREE STAGES, NOT A TIMEOUT EACH. <<<
-        // Three separate timeouts would let a wallet hold the single worker thread for
-        // 3x timeoutMs while appearing to respect the caller's value. A deadline is
-        // also what the caller actually asked for: "do not take longer than this".
+                            WalletOp op, String cluster, String identityName,
+                            String identityUri, String iconRelativeUri,
+                            int timeoutMs, String authToken) {
+        // >>> ONE DEADLINE ACROSS ALL STAGES, NOT A TIMEOUT EACH. <<<
+        // Separate timeouts would let a wallet hold the single worker thread for a
+        // multiple of timeoutMs while appearing to respect the caller's value. A
+        // deadline is also what the caller actually asked for: "do not take longer
+        // than this".
         //
         // These get() calls were previously UNBOUNDED, relying entirely on the client
-        // library's internal timeouts. Those do fire -- Seed Vault's failures arrived
-        // as "Timed out waiting for response" -- but a plugin that hands its liveness
-        // to a dependency has no answer when the dependency does not.
+        // library's internal timeouts. Those do fire -- a wallet that goes silent
+        // surfaces as "Timed out waiting for response" -- but a plugin that hands its
+        // liveness to a dependency has no answer when the dependency does not.
         final long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
         try {
             MobileWalletAdapterClient client = scenario.start().get(remaining(deadline), TimeUnit.NANOSECONDS);
 
             MobileWalletAdapterClient.AuthorizationResult auth = authorizeNegotiated(
-                    client, scenario, identityUri, iconRelativeUri, identityName, cluster, deadline);
-
-            // No authToken argument on signAndSendTransactions: authorization is
-            // bound to THIS session, which is why authorize and sign live in one
-            // plugin call rather than two.
-            MobileWalletAdapterClient.SignAndSendTransactionsResult signed =
-                    client.signAndSendTransactions(payloads, minContextSlot)
-                            .get(remaining(deadline), TimeUnit.NANOSECONDS);
-
-            JSArray signatures = new JSArray();
-            if (signed.signatures != null) {
-                for (byte[] sig : signed.signatures) {
-                    signatures.put(Base58.encode(sig));
-                }
-            }
+                    client, scenario, identityUri, iconRelativeUri, identityName, cluster,
+                    authToken, deadline);
 
             JSObject ret = new JSObject();
             ret.put("address", Base58.encode(auth.publicKey));
-            ret.put("signatures", signatures);
             ret.put("authToken", auth.authToken);
             if (auth.accountLabel != null) ret.put("accountLabel", auth.accountLabel);
+
+            op.apply(client, auth, deadline, ret);
 
             settle(call, session, () -> call.resolve(ret));
         } catch (Throwable t) {
@@ -240,40 +315,49 @@ public class SolanaMwaPlugin extends Plugin {
     }
 
     /**
-     * Map each failure to its own code. The entire argument for MWA over a
-     * deeplink is that a deeplink cannot distinguish "in flight" from "failed";
-     * collapsing every cause into one rejection would throw that away.
-     */
-    /**
-     * >>> ASK THE WALLET WHAT PROTOCOL IT SPEAKS BEFORE ASKING IT FOR A SIGNATURE. <<<
-     *
-     * MWA has two authorize shapes and this library will send whichever overload you
-     * call, with no regard for what the session negotiated: the four-argument form
-     * sends `cluster` (1.x) and the eight-argument form sends `chain` (2.0). Send the
-     * wrong one and a strict wallet has a request it cannot interpret.
-     *
-     * WHY THIS IS NOT PARANOIA -- the two wallets on one Seeker negotiate DIFFERENTLY,
-     * measured Sep 11 2026 in consecutive runs of the same APK:
-     *
-     *   Phantom 26.6.0 : could not parse session properties, falling back on legacy session
-     *   Seed Vault 1.16: Received session properties: version = 1
-     *
-     * `get_capabilities` is the protocol's own discovery call and it renders NO UI, so
-     * it costs the user nothing and tells us which shape to send. A wallet advertising
-     * optional features is answering in 2.0 terms.
-     *
-     * IT FAILS SAFE, AND THAT IS THE POINT OF THE SEPARATE BUDGET: if the probe times
-     * out we fall through to the legacy shape, which is exactly what this plugin sent
-     * before and is device-proven against Phantom on two handsets. The worst case is
-     * today's behaviour, reached a few seconds later -- never a new failure mode.
+     * Authorize, choosing the request shape from what the SESSION negotiated, and
+     * reusing a previous authorization when the caller supplies its token.
      */
     private MobileWalletAdapterClient.AuthorizationResult authorizeNegotiated(
             MobileWalletAdapterClient client, LocalAssociationScenario scenario,
             String identityUri, String iconRelativeUri, String identityName,
-            String cluster, long deadline) throws Exception {
+            String cluster, String authToken, long deadline) throws Exception {
 
         final Uri idUri = Uri.parse(identityUri);
         final Uri iconUri = iconRelativeUri == null ? null : Uri.parse(iconRelativeUri);
+
+        // >>> REUSE A PREVIOUS AUTHORIZATION WHEN THE CALLER HAS ONE. THIS IS THE
+        // DIFFERENCE BETWEEN TWO WALLET PROMPTS AND ONE. <<<
+        //
+        // Without a token every call is a fresh authorize FOLLOWED BY a sign, and a
+        // wallet gates each behind its own unlock -- so a user signing two things in a
+        // row unlocks four times. Observed on Phantom, reported as "it asked me to
+        // unlock twice", which is exactly what the protocol was doing.
+        //
+        // reauthorize carries no cluster or chain, so the version question below does
+        // not arise on this path.
+        //
+        // A STALE TOKEN FALLS BACK TO A FULL AUTHORIZE RATHER THAN FAILING. Tokens are
+        // revoked when the user disconnects the app in their wallet, and a caller that
+        // has stored one cannot know that happened. Refusing would strand them with a
+        // value they must somehow learn to discard; retrying costs one extra prompt in
+        // the rare case and nothing in the common one.
+        if (authToken != null && !authToken.isEmpty()) {
+            try {
+                MobileWalletAdapterClient.AuthorizationResult re = client
+                        .reauthorize(idUri, iconUri, identityName, authToken)
+                        .get(remaining(deadline), TimeUnit.NANOSECONDS);
+                Log.i(TAG, "reauthorize accepted the stored token -- no connect prompt");
+                return re;
+            } catch (TimeoutException e) {
+                // The deadline is shared, so there is no budget left to spend on a
+                // second attempt, and retrying would double an already-elapsed wait.
+                throw e;
+            } catch (Exception e) {
+                Log.w(TAG, "reauthorize rejected the stored token, falling back to a full"
+                        + " authorize: " + e.getMessage());
+            }
+        }
 
         // >>> ASK THE SESSION WHAT IT NEGOTIATED. DO NOT INFER IT. <<<
         //
@@ -319,6 +403,11 @@ public class SolanaMwaPlugin extends Plugin {
         return Math.max(0L, deadline - System.nanoTime());
     }
 
+    /**
+     * Map each failure to its own code. The entire argument for MWA over a deeplink is
+     * that a deeplink cannot distinguish "in flight" from "failed"; collapsing every
+     * cause into one rejection would throw that away.
+     */
     private String classify(Throwable cause, Session session) {
         // Our own deadline elapsing is an association timeout from the caller's point
         // of view: the wallet never came back. Reported distinctly from a library
