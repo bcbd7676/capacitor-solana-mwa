@@ -230,13 +230,24 @@ Rejections carry a `code`, because the entire reason to prefer MWA over a deepli
 | --- | --- |
 | `NO_WALLET` | nothing on the device implements the MWA endpoint |
 | `DECLINED` | the user dismissed or rejected the wallet UI |
-| `ASSOCIATION_TIMEOUT` | the wallet never connected back within `timeoutMs` |
+| `ASSOCIATION_TIMEOUT` | the wallet never connected back, or never answered, within `timeoutMs` |
+| `ALREADY_IN_FLIGHT` | another wallet interaction is still running — see below |
 | `SIGN_FAILED` | the wallet reported a failure signing or submitting |
 | `NOT_SUBMITTED` | signed, but the wallet did not submit it to the cluster |
 | `INVALID_PAYLOAD` | a payload was missing or not valid base64 |
 | `UNSUPPORTED_PLATFORM` | called on web or iOS |
 
 Payloads are decoded **before** any wallet UI is shown, so a malformed transaction fails immediately rather than after a round trip.
+
+### One interaction at a time, and one deadline across all three stages
+
+**A second concurrent call is rejected immediately with `ALREADY_IN_FLIGHT` rather than queued.** A user cannot approve two wallet prompts at once, so a second call can only be a mis-tap or an impatient retry — and queueing it caused a real hang.
+
+On a Seeker, four taps against a wallet that never answered left the app unusable until the handset was restarted. The mechanism is the interaction between two lines that each look correct: `startActivityForResult` fires on the caller's thread per tap, but sessions run on a **single-threaded** executor. So every tap launched a wallet while only the first tap's session actually ran; the rest queued behind a blocking `get()`, each having already allocated a local port that `scenario.close()` — living in the session's `finally` — could never reach. Four taps meant four leaked ports, four unsettled promises and a queue minutes deep.
+
+**`timeoutMs` is a deadline across association, authorize and sign — not a timeout for each.** Three separate timeouts would let a wallet occupy the worker for `3 × timeoutMs` while appearing to honour the value you passed. Exceeding it yields `ASSOCIATION_TIMEOUT`, or `DECLINED` if the user had already backed out of the wallet.
+
+Those `get()` calls were previously **unbounded**, relying entirely on the client library's internal timeouts. Those do fire in practice — Seed Vault's failures arrived as "Timed out waiting for response" — but a plugin that delegates its own liveness to a dependency has no answer when the dependency does not.
 
 ## Notes for contributors
 

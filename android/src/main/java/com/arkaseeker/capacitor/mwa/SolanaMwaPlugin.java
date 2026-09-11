@@ -23,6 +23,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @CapacitorPlugin(name = "SolanaMwa")
@@ -49,6 +51,28 @@ public class SolanaMwaPlugin extends Plugin {
      * cannot rely on Play vitals to notice, so it would ship invisibly.
      */
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+
+    /**
+     * >>> ONE WALLET INTERACTION AT A TIME, REJECTED FAST RATHER THAN QUEUED. <<<
+     *
+     * This is the fix for a REAL HANG, found on a Seeker on Sep 11 2026: four taps
+     * against a wallet that never answered left the app unusable until the handset
+     * was restarted.
+     *
+     * The mechanism is the interaction between two correct-looking lines. The worker
+     * is SINGLE-THREADED (deliberately -- see above), but startActivityForResult fires
+     * on the caller's thread BEFORE the session is queued. So every tap launched a
+     * wallet while only the first tap's runSession actually ran; the rest sat in the
+     * queue behind a get() blocking for the full timeout. Their scenarios had already
+     * allocated local ports, and scenario.close() lives in runSession's finally, which
+     * a queued task never reaches. Four taps therefore meant four leaked ports, four
+     * unsettled promises, and a queue minutes deep.
+     *
+     * QUEUEING IS THE WRONG SEMANTIC ANYWAY: a user cannot approve two wallet prompts
+     * at once, so a second concurrent call can only ever be a mis-tap or an impatient
+     * retry. Failing it immediately is both honest and what makes the hang impossible.
+     */
+    private final AtomicBoolean inFlight = new AtomicBoolean(false);
 
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
 
@@ -105,6 +129,13 @@ public class SolanaMwaPlugin extends Plugin {
             return;
         }
 
+        // Claim the slot BEFORE allocating a scenario, so a rejected concurrent call
+        // never creates a port it will not close.
+        if (!inFlight.compareAndSet(false, true)) {
+            call.reject("A wallet interaction is already in progress", "ALREADY_IN_FLIGHT");
+            return;
+        }
+
         final LocalAssociationScenario scenario;
         final Intent associationIntent;
         try {
@@ -115,11 +146,15 @@ public class SolanaMwaPlugin extends Plugin {
             associationIntent = LocalAssociationIntentCreator.createAssociationIntent(
                     null /* default endpoint prefix */, scenario.getPort(), scenario.getSession());
         } catch (Exception e) {
+            inFlight.set(false);
             call.reject("Could not start a local association: " + e.getMessage(), "SIGN_FAILED");
             return;
         }
 
         if (associationIntent == null) {
+            // Release AND close: the scenario above already holds a port.
+            inFlight.set(false);
+            try { scenario.close(); } catch (Throwable ignored) { }
             call.reject("No wallet could handle the association intent", "NO_WALLET");
             return;
         }
@@ -134,26 +169,38 @@ public class SolanaMwaPlugin extends Plugin {
         startActivityForResult(call, associationIntent, "walletResult");
 
         worker.execute(() -> runSession(call, session, scenario, payloads,
-                cluster, identityName, identityUri, iconRelativeUri, minContextSlot));
+                cluster, identityName, identityUri, iconRelativeUri, minContextSlot, timeoutMs));
     }
 
     private void runSession(PluginCall call, Session session, LocalAssociationScenario scenario,
                             byte[][] payloads, String cluster, String identityName,
-                            String identityUri, String iconRelativeUri, Integer minContextSlot) {
+                            String identityUri, String iconRelativeUri, Integer minContextSlot,
+                            int timeoutMs) {
+        // >>> ONE DEADLINE ACROSS ALL THREE STAGES, NOT A TIMEOUT EACH. <<<
+        // Three separate timeouts would let a wallet hold the single worker thread for
+        // 3x timeoutMs while appearing to respect the caller's value. A deadline is
+        // also what the caller actually asked for: "do not take longer than this".
+        //
+        // These get() calls were previously UNBOUNDED, relying entirely on the client
+        // library's internal timeouts. Those do fire -- Seed Vault's failures arrived
+        // as "Timed out waiting for response" -- but a plugin that hands its liveness
+        // to a dependency has no answer when the dependency does not.
+        final long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
         try {
-            MobileWalletAdapterClient client = scenario.start().get();
+            MobileWalletAdapterClient client = scenario.start().get(remaining(deadline), TimeUnit.NANOSECONDS);
 
             MobileWalletAdapterClient.AuthorizationResult auth = client.authorize(
                     Uri.parse(identityUri),
                     iconRelativeUri == null ? null : Uri.parse(iconRelativeUri),
                     identityName,
-                    cluster).get();
+                    cluster).get(remaining(deadline), TimeUnit.NANOSECONDS);
 
             // No authToken argument on signAndSendTransactions: authorization is
             // bound to THIS session, which is why authorize and sign live in one
             // plugin call rather than two.
             MobileWalletAdapterClient.SignAndSendTransactionsResult signed =
-                    client.signAndSendTransactions(payloads, minContextSlot).get();
+                    client.signAndSendTransactions(payloads, minContextSlot)
+                            .get(remaining(deadline), TimeUnit.NANOSECONDS);
 
             JSArray signatures = new JSArray();
             if (signed.signatures != null) {
@@ -185,6 +232,8 @@ public class SolanaMwaPlugin extends Plugin {
                 // Closing is best-effort; a failure here must not mask the real result.
             }
             sessions.remove(call.getCallbackId());
+            // Last, and only after the port is released: let the next call in.
+            inFlight.set(false);
         }
     }
 
@@ -193,7 +242,18 @@ public class SolanaMwaPlugin extends Plugin {
      * deeplink is that a deeplink cannot distinguish "in flight" from "failed";
      * collapsing every cause into one rejection would throw that away.
      */
+    /** Nanoseconds left before the deadline, never negative -- get(0) fails fast. */
+    private static long remaining(long deadline) {
+        return Math.max(0L, deadline - System.nanoTime());
+    }
+
     private String classify(Throwable cause, Session session) {
+        // Our own deadline elapsing is an association timeout from the caller's point
+        // of view: the wallet never came back. Reported distinctly from a library
+        // failure so the two are not confused when debugging.
+        if (cause instanceof TimeoutException) {
+            return session.userCancelled.get() ? "DECLINED" : "ASSOCIATION_TIMEOUT";
+        }
         if (cause instanceof MobileWalletAdapterClient.InvalidPayloadsException) {
             return "INVALID_PAYLOAD";
         }
