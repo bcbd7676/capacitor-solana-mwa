@@ -3,6 +3,7 @@ package com.arkaseeker.capacitor.mwa;
 import android.content.Intent;
 import android.net.Uri;
 import android.util.Base64;
+import android.util.Log;
 
 import androidx.activity.result.ActivityResult;
 
@@ -30,6 +31,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @CapacitorPlugin(name = "SolanaMwa")
 public class SolanaMwaPlugin extends Plugin {
 
+    private static final String TAG = "SolanaMwa";
+
     // >>> 90 SECONDS, NOT 20, AND THE REASON IS A DEVICE MEASUREMENT RATHER THAN A GUESS.
     // This value bounds BOTH the association and the wait for each JSON-RPC response,
     // and the second of those is a HUMAN sitting in the wallet's approval screen. On
@@ -44,6 +47,12 @@ public class SolanaMwaPlugin extends Plugin {
     // machine when the counterparty is a person. Callers who want the old behaviour can
     // still pass timeoutMs explicitly.
     private static final int DEFAULT_TIMEOUT_MS = 90000;
+
+    // Deliberately SMALL and separate from the main deadline: this is a machine-to-machine
+    // request with no human in it, so a wallet that has not answered in this long is not
+    // going to. Spending the user's whole budget waiting for a discovery call would turn a
+    // helpful probe into the thing that causes the timeout.
+    private static final long CAPABILITIES_PROBE_SECONDS = 10;
 
     /**
      * The scenario's futures BLOCK. They must never run on the main thread: a
@@ -189,11 +198,8 @@ public class SolanaMwaPlugin extends Plugin {
         try {
             MobileWalletAdapterClient client = scenario.start().get(remaining(deadline), TimeUnit.NANOSECONDS);
 
-            MobileWalletAdapterClient.AuthorizationResult auth = client.authorize(
-                    Uri.parse(identityUri),
-                    iconRelativeUri == null ? null : Uri.parse(iconRelativeUri),
-                    identityName,
-                    cluster).get(remaining(deadline), TimeUnit.NANOSECONDS);
+            MobileWalletAdapterClient.AuthorizationResult auth = authorizeNegotiated(
+                    client, identityUri, iconRelativeUri, identityName, cluster, deadline);
 
             // No authToken argument on signAndSendTransactions: authorization is
             // bound to THIS session, which is why authorize and sign live in one
@@ -242,6 +248,72 @@ public class SolanaMwaPlugin extends Plugin {
      * deeplink is that a deeplink cannot distinguish "in flight" from "failed";
      * collapsing every cause into one rejection would throw that away.
      */
+    /**
+     * >>> ASK THE WALLET WHAT PROTOCOL IT SPEAKS BEFORE ASKING IT FOR A SIGNATURE. <<<
+     *
+     * MWA has two authorize shapes and this library will send whichever overload you
+     * call, with no regard for what the session negotiated: the four-argument form
+     * sends `cluster` (1.x) and the eight-argument form sends `chain` (2.0). Send the
+     * wrong one and a strict wallet has a request it cannot interpret.
+     *
+     * WHY THIS IS NOT PARANOIA -- the two wallets on one Seeker negotiate DIFFERENTLY,
+     * measured Sep 11 2026 in consecutive runs of the same APK:
+     *
+     *   Phantom 26.6.0 : could not parse session properties, falling back on legacy session
+     *   Seed Vault 1.16: Received session properties: version = 1
+     *
+     * `get_capabilities` is the protocol's own discovery call and it renders NO UI, so
+     * it costs the user nothing and tells us which shape to send. A wallet advertising
+     * optional features is answering in 2.0 terms.
+     *
+     * IT FAILS SAFE, AND THAT IS THE POINT OF THE SEPARATE BUDGET: if the probe times
+     * out we fall through to the legacy shape, which is exactly what this plugin sent
+     * before and is device-proven against Phantom on two handsets. The worst case is
+     * today's behaviour, reached a few seconds later -- never a new failure mode.
+     */
+    private MobileWalletAdapterClient.AuthorizationResult authorizeNegotiated(
+            MobileWalletAdapterClient client, String identityUri, String iconRelativeUri,
+            String identityName, String cluster, long deadline) throws Exception {
+
+        final Uri idUri = Uri.parse(identityUri);
+        final Uri iconUri = iconRelativeUri == null ? null : Uri.parse(iconRelativeUri);
+
+        boolean walletSpeaksV2 = false;
+        try {
+            long probeBudget = Math.min(remaining(deadline),
+                    TimeUnit.SECONDS.toNanos(CAPABILITIES_PROBE_SECONDS));
+            MobileWalletAdapterClient.GetCapabilitiesResult caps =
+                    client.getCapabilities().get(probeBudget, TimeUnit.NANOSECONDS);
+            walletSpeaksV2 = caps.supportedOptionalFeatures != null
+                    && caps.supportedOptionalFeatures.length > 0;
+            Log.i(TAG, "get_capabilities answered: optionalFeatures="
+                    + (caps.supportedOptionalFeatures == null
+                        ? "null" : String.valueOf(caps.supportedOptionalFeatures.length))
+                    + " signAndSend=" + caps.supportsSignAndSendTransactions
+                    + " -> sending the " + (walletSpeaksV2 ? "2.0 (chain)" : "legacy (cluster)")
+                    + " authorize");
+        } catch (TimeoutException e) {
+            // The wallet did not answer a request that draws no UI at all. That is worth
+            // saying out loud, because it means the silence is not about the approval.
+            Log.w(TAG, "get_capabilities did not answer within " + CAPABILITIES_PROBE_SECONDS
+                    + "s -- the wallet is ignoring a NON-UI request. Falling back to the"
+                    + " legacy authorize.");
+        } catch (Exception e) {
+            Log.w(TAG, "get_capabilities failed (" + e.getClass().getSimpleName()
+                    + "), falling back to the legacy authorize", e);
+        }
+
+        if (walletSpeaksV2) {
+            // `cluster` and `chain` carry the same identifiers ("solana:devnet"), so the
+            // caller's value needs no translation -- only the parameter it lands in.
+            return client.authorize(idUri, iconUri, identityName, cluster,
+                    null /* authToken */, null /* features */, null /* addresses */,
+                    null /* signInPayload */).get(remaining(deadline), TimeUnit.NANOSECONDS);
+        }
+        return client.authorize(idUri, iconUri, identityName, cluster)
+                .get(remaining(deadline), TimeUnit.NANOSECONDS);
+    }
+
     /** Nanoseconds left before the deadline, never negative -- get(0) fails fast. */
     private static long remaining(long deadline) {
         return Math.max(0L, deadline - System.nanoTime());

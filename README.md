@@ -4,7 +4,7 @@ Solana [Mobile Wallet Adapter](https://docs.solanamobile.com/) for [Capacitor](h
 
 > **Status: pre-release (0.1.0). Device-proven.** A full `authorize` + `signAndSendTransactions` round trip has been completed against Phantom on a Samsung Galaxy S10 (Android 12), devnet, Sep 10 2026 — transaction [`3G3SqCPG…kKzvCp`](https://explorer.solana.com/tx/3G3SqCPGVU4YT16S4HR2AD3bUYVUMdMCvsxJsK4612wp2UjSJfXLFdVgC5fgyddSMAi9DZBSwkmCJtWXV9kKzvCp?cluster=devnet), finalized, `err: null`, confirmed by `getSignatureStatuses` rather than by the app's own report.
 >
-> **What that does and does not cover.** Devnet only, and there is no test suite. **Phantom passes on two handsets** (Galaxy S10 / Android 12, and Seeker / Android 16). **Seed Vault 1.16.0 on a Seeker does NOT complete** — association and session establish and the wallet reads its own vault, but it never presents an approval UI and never answers the request. That is characterised, with the six ruled-out explanations and the same-device Phantom control, under [Wallet compatibility](#wallet-compatibility). **MWA's whole point is that the wallet is pluggable, so a pass on one is not a pass on another — and this is the case that proves it.** Treat the plugin as working-but-young, and do not put it on a money path without testing the path you actually use.
+> **What that does and does not cover.** Devnet only, and there is no test suite. **Phantom passes on two handsets** (Galaxy S10 / Android 12, and Seeker / Android 16) and **Seed Vault wallet 1.16.0 passes on a Seeker** — three round trips, each signature verified on chain rather than from the client's claim of success. **THE TWO WALLETS NEED DIFFERENT AUTHORIZE REQUESTS: Phantom falls back to a legacy MWA 1.x session and Seed Vault negotiates 2.0, and the client library sends whichever overload you call regardless.** This plugin therefore asks the wallet what it is, via `get_capabilities`, before it asks it for anything — see [Wallet compatibility](#wallet-compatibility), which also records the earlier version of this line reporting Seed Vault as broken when the fault was ours. **MWA's whole point is that the wallet is pluggable, so a pass on one is not a pass on another.** Treat the plugin as working-but-young, and do not put it on a money path without testing the path you actually use.
 
 ## Why this exists
 
@@ -167,136 +167,104 @@ example declares the placeholder `https://example.com`, which hosts no associati
 
 ## Wallet compatibility
 
-Measured on hardware, not inferred. Every row is a real run against a real wallet.
+Measured on hardware, not inferred. Every row is a real run against a real wallet, and every signature below
+was verified by reading the transaction back from the cluster rather than trusting the client.
 
-| wallet | device | `walletAvailable()` | association + session | wallet UI | wallet responds | round trip |
-| --- | --- | --- | --- | --- | --- | --- |
-| Phantom 26.6.0 | Galaxy S10, Android 12 | yes | yes | renders | yes | **yes — signature `3G3SqCPG…kKzvCp`** |
-| Phantom 26.6.0 | Seeker, Android 16 | yes | yes | renders | yes | **yes — signature `5TqugEdW…gjSm9gb`** |
-| Seed Vault wallet 1.16.0 (build 19824) | Seeker, Android 16 | yes | yes | **draws an empty window** | **never responds** | no |
+| wallet | device | session | authorize shape it needs | round trip |
+| --- | --- | --- | --- | --- |
+| Phantom 26.6.0 | Galaxy S10, Android 12 | legacy | 1.x (`cluster`) | **yes — `3G3SqCPG…kKzvCp`** |
+| Phantom 26.6.0 | Seeker, Android 16 | legacy | 1.x (`cluster`) | **yes — `5TqugEdW…gjSm9gb`** |
+| Seed Vault wallet 1.16.0 (build 19824) | Seeker, Android 16 | **properties v1 (MWA 2.0)** | **2.0 (`chain`)** | **yes — `2RyPSqyg…mPJhM5fV`** |
 
-### Seed Vault wallet 1.16.0 — association succeeds, the request is never answered
+### The two wallets do not speak the same protocol version, and this library will not notice
 
-**This is a wallet-side observation, and it is deliberately worded narrowly: what is established is that
-*this* dApp cannot complete MWA with *this* wallet build. The plugin has not been tested against Seed
-Vault from a non-Capacitor dApp, so nothing here supports the broader claim that the wallet's MWA is
-broken in general.**
-
-Everything up to the approval is healthy. The association is created, retried with backoff while the
-wallet starts, and establishes; the wallet then reads its own vault successfully:
+**THIS IS THE THING WORTH TAKING AWAY FROM THIS REPO.** Two wallets on one handset, consecutive runs of the
+same APK, negotiate differently:
 
 ```
-15:04:20.020  LocalAssociationScenario: Creating local association scenario for ws://127.0.0.1:54536/solana-wallet
-15:04:20.196  LocalAssociationScenario: Connect attempt failed, retrying in 150 ms      <- wallet still starting
-              ... backoff 200, 500, 500, 750, 750, 1000 ms ...
-15:04:30.097  SeekerWalletSMS: getAuthorizedSeeds success - found 1 seed(s)
-15:04:30.148  LocalAssociationScenario: WebSocket connection established
-15:04:30.160  LocalAssociationScenario: Session established, scenario ready for use
-15:04:30.154  receiverMessageReceived: size=129        <- encrypted session traffic, both directions
-15:06:03.890  FAILED [SIGN_FAILED] Timed out waiting for response with id=1
+Phantom 26.6.0  : MobileWalletAdapterSession: could not parse session properties, falling back on legacy session
+Seed Vault 1.16 : MobileWalletAdapterSession: Received session properties: version = 1
 ```
 
-**`id=1` IS THE AUTHORIZE REQUEST, AND THAT MATTERS FOR EVERY EXPLANATION BELOW.** The payload -- and so
-the transaction, the fee payer and the account -- travels in request `id=2`, which is never sent, because
-the wallet never answers the first one. Any theory that depends on what is being signed is ruled out by
-this line alone: the wallet goes quiet before it has been told.
-
-**The approval window is created, is visible, completes a draw pass, and contains nothing.** That is more
-specific than "no UI appears", and it is the distinction that rules out a wallet which simply never got as
-far as showing one. Read out of `dumpsys window` while a request was pending:
-
-```
-mAttrs   = (0,0)(wrapxwrap) gr=BOTTOM CENTER_VERTICAL ... fmt=TRANSPARENT
-Frames   : frame=[0,110][1200,2598]          <- essentially the whole screen
-mViewVisibility = 0x0 (VISIBLE)   Surface: shown=true   mDrawState = HAS_DRAWN
-```
-
-`BufferQueueProducer` then reports `fps=0.03`-`1.74` for as long as the request is open: it repaints, and
-every repaint is empty. The dApp shows through it undimmed. There is no prompt and nothing to tap.
-
-**It does not crash and it does not give up on its own.** In the funded retest the window stayed resumed
-and focused for 82 seconds and died only when the plugin's own deadline closed the association:
-
-```
-20:40:16  Session established, scenario ready for use
-20:40:16  SeekerWalletSMS: getAuthorizedSeeds success - found 1 seed(s)
-20:40:16  ...82 seconds of empty repaints, sheet resumed and focused...
-20:41:38  our deadline fires, scenario.close()
-20:41:39  SurfaceFlinger: onHandleDestroyed  x3   <- the sheet dies because WE hung up
-```
-
-**Reproduced eight times across two builds.** Ruled out, each by a separate run:
-
-| hypothesis | how it was killed |
-| --- | --- |
-| user missed a biometric prompt | no prompt is drawn; the `BiometricService` lines are capability checks, not prompts |
-| screen timeout hid the sheet | reproduced with the screen held awake |
-| notification shade stole focus | reproduced with the shade closed |
-| icon fetch blocking the sheet | reproduced with `iconRelativeUri` omitted entirely |
-| wallet not on the requested cluster | reproduced with the wallet explicitly in devnet mode |
-| screenshot protection hiding a real sheet | Phantom blanks captures via `FLAG_SECURE`; Seed Vault's did not — the dApp was visible underneath, so the sheet was genuinely empty |
-| the account holds no SOL | re-run Sep 11 2026 with 0.5 devnet SOL in the vault's own account: identical failure |
-| the wallet rejects the `solana:devnet` cluster identifier | re-run with `cluster: 'solana:mainnet'`, everything else held constant: identical failure |
-
-**>>> THE ZERO-BALANCE HYPOTHESIS IS CLOSED, AND IT IS DEAD TWICE OVER. It was the one this section
-previously recorded as open. <<<**
-
-Every earlier run used an account holding no devnet SOL, which left an obvious untested explanation:
-perhaps the wallet declines to draw a consent sheet for an empty account. **Re-run on Sep 11 2026 with
-0.5 devnet SOL in the vault's own account, on the same wallet build, it failed identically** — same empty
-window, same silence, same timeout.
-
-**And it could not have mattered anyway, which is the stronger half of the argument: the step that fails is
-AUTHORIZE, and an authorize request carries no account at all.**
+`mobile-wallet-adapter-clientlib` 2.1.0 offers two `authorize` overloads and **sends whichever one you call,
+with no regard for what the session negotiated:**
 
 ```java
-client.authorize(Uri.parse(identityUri), iconUri, identityName, cluster)
+authorize(Uri, Uri, String, String)                    // 1.x -- sends "cluster"   (deprecated)
+authorize(Uri, Uri, String, String, String, String[], byte[][], SignInWithSolana.Payload)
+                                                       // 2.0 -- sends "chain"
 ```
 
-No address, no balance, nothing to be empty. The wallet has not been told which account we want — it is
-being asked to choose one. A balance-based explanation would require the wallet to be doing something the
-protocol does not ask of it at that point. **The funded run is what settles it; this is why it was never a
-promising hypothesis in the first place.**
+**SEND THE 1.x SHAPE TO A 2.0 WALLET AND SEED VAULT DRAWS A SHEET WITH NOTHING IN IT AND NEVER REPLIES.** The
+association is healthy, the encrypted session is established, the wallet reads its own vault
+(`getAuthorizedSeeds success - found 1 seed(s)`), and then the request expires. What you see is a full-screen,
+`VISIBLE`, `HAS_DRAWN` window with your dApp showing through it undimmed, repainting at `fps=0.03` until
+somebody gives up.
 
-**The second gap in the earlier test is also closed: the account Seed Vault holds is now confirmed.** It
-had been taken from an address "on record for the handset" with no way to check, because the mismatch
-assertion that would reveal the true address is only reachable after a successful authorize. It is now
-confirmed by elimination — the handset's other funded account is Phantom's, proven by a round trip signed
-by it.
+**So this plugin asks before it assumes.** It calls `get_capabilities` first -- the protocol's own discovery
+request, which renders NO UI and costs the user nothing -- and picks the authorize shape from the answer. If
+the probe goes unanswered within ten seconds it falls back to the legacy shape, which is the behaviour that is
+device-proven against Phantom on two handsets. **The worst case is the old behaviour a few seconds later,
+never a new failure mode.**
 
-**The control is the valuable half, and on the Seeker it is now a completed round trip rather than merely
-a rendered sheet.** The *same APK*, on the *same device*, in the *same session*, minutes after the Seed
-Vault failure, drove Phantom 26.6.0 through authorize, approval, biometric and signature to a transaction
-confirmed on devnet:
+### Two gotchas that cost an evening each
 
-```
-signature 5TqugEdWEhk2HJ4ibGEEy9Nfdr135GnxDVRrduAmFtRJXz6yKG8H794pMRVigtesMH4up7Zf74gUMMBuWgjSm9gb
-slot      496825314     err null     fee 80000 lamports
-signer    9ddbhSFf6SEE8vQYXAMTovuKAmuKs6y11j9KETRX6Myn   (balance 500000000 -> 499920000)
-```
+**>>> THE WALLET MUST BE ON THE SAME NETWORK AS THE CLUSTER YOU REQUEST, AND A HEALTHY WALLET SAYS SO. <<<**
+Seed Vault set to mainnet, asked to authorize `solana:devnet`, shows a clear "network mismatch" dialog and
+returns a real protocol error. **THE SAME MISMATCH UNDER THE WRONG AUTHORIZE SHAPE IS THE SILENT EMPTY SHEET
+ABOVE** -- which is almost certainly what the empty sheet always was: a dialog the wallet could not render
+because it could not interpret the request that provoked it.
 
-Verified by reading the transaction back from the cluster rather than from the client's own claim of
-success. Tap to result was **14.6 seconds**, including the Android chooser and a fingerprint prompt.
+**>>> DO NOT GATE ON `supportsSignAndSendTransactions`. SEED VAULT REPORTS `false` AND THEN PERFORMS
+SIGN-AND-SEND SUCCESSFULLY. <<<** Measured: `get_capabilities answered: optionalFeatures=1 signAndSend=false`,
+followed by a completed `sign_and_send_transactions` and signature `2RyPSqyg…` confirmed on devnet. The
+capability flag and the behaviour disagree, so trust the behaviour. This plugin logs the capabilities and
+uses them ONLY to choose the authorize shape.
 
-So the association code, the session layer, the payload, the encoding, the error mapping and the send path
-are all exercised and correct on that exact hardware in that exact session. **The difference is the
-wallet.** The same build also produces real protocol-level replies from Phantom on demand — `-3/sign
-request declined` and a `CancellationException`, mapped to `SIGN_FAILED` and `DECLINED` — so the plugin can
-be shown to report a wallet's refusal correctly, which is exactly what Seed Vault never gives it the
-chance to do.
+### A correction, kept deliberately
 
-To reproduce: install the example app on a Seeker, set an RPC endpoint that does not 403 a `localhost`
-origin (see the blockhash field note), put **the address of the account that wallet actually holds** in the
-fee-payer field, and tap **Authorize + sign + send**. Seed Vault must be the handler — if Phantom or
-Jupiter is also installed, Android may offer a chooser.
+**AN EARLIER VERSION OF THIS SECTION REPORTED THAT SEED VAULT 1.16.0 "DOES NOT COMPLETE MWA", WITH EIGHT
+HYPOTHESES RULED OUT ACROSS EIGHT CONTROLLED RUNS. THAT CONCLUSION WAS WRONG, AND THE FAULT WAS THIS
+PLUGIN'S.** It is recorded here rather than quietly deleted, because the failure mode is instructive and
+because the report was one edit away from being sent to the wallet's authors as a bug in their software.
 
-**>>> THE FEE PAYER MUST BE AN ACCOUNT THE WALLET CAN SIGN FOR, AND GETTING IT WRONG IS NOT A CLEAN ERROR
-— IT LOOKS EXACTLY LIKE THE BUG ABOVE. <<<** An earlier version of this line said "any valid base58
-address", which is wrong and cost three runs on Sep 11 2026. Pointed at an address Phantom does not hold,
-Phantom rendered its sheet, took a fingerprint and accepted the approval — and then never returned a
-result, so the plugin reported `ASSOCIATION_TIMEOUT`, the same error Seed Vault produces for an entirely
-different reason. Nothing reached the chain. **A timeout that arrives AFTER a sheet rendered and the user
-approved is this; a timeout with NO sheet is the Seed Vault case.**
+**WHAT THE EIGHT RUNS ACTUALLY ESTABLISHED WAS THAT THE CAUSE WAS NOT ANY OF THE EIGHT THINGS TESTED.** Each
+hypothesis was killed honestly and the conclusion still did not follow: "not A through H" is not "the wallet
+is broken", and the gap between those two was never closed by evidence. The control -- Phantom succeeding on
+the same handset in the same session -- felt like it isolated the wallet, and it did not: **both wallets were
+exercised through the same code path, but that code path was correct for exactly one of them.** A control
+only isolates the variable you actually varied.
+
+**WHAT WOULD HAVE CAUGHT IT SOONER: the compiler said so.** Building this plugin emits `uses or overrides a
+deprecated API` -- the 1.x `authorize` -- and that warning sat in the build output through every one of those
+runs. **AND ONE LINE OF THE WALLET'S OWN LOGGING NAMED THE PROBLEM** (`Received session properties: version =
+1`); it was captured, and read as noise, because the investigation was looking for a reason the wallet was
+at fault.
+
+**THE PART THAT IS STILL NOT ISOLATED, STATED PLAINLY: the run that first rendered a sheet changed TWO
+variables** -- the wallet process was restarted AND the authorize shape changed. The network mismatch was a
+third factor discovered immediately after. So "the 1.x shape causes the empty sheet" is the leading
+explanation and is consistent with everything observed, **but it has not been isolated by a controlled run,
+and it should not be written up as though it had.**
+
+### Reproducing any of this
+
+Install the example app on a Seeker, set an RPC endpoint that does not 403 a `localhost` origin (see the
+blockhash field note), put **the address of the account that wallet actually holds** in the fee-payer field,
+and tap **Authorize + sign + send**.
+
+**>>> THE FEE PAYER MUST BE AN ACCOUNT THE WALLET CAN SIGN FOR, AND GETTING IT WRONG IS NOT A CLEAN ERROR. <<<**
+An earlier version of this line said "any valid base58 address". Pointed at an address Phantom does not hold,
+Phantom rendered its sheet, took a fingerprint, accepted the approval -- and then never returned a result, so
+the plugin reported `ASSOCIATION_TIMEOUT`. Nothing reached the chain. **A timeout AFTER a sheet rendered and
+the user approved is a wrong fee payer; a timeout with NO sheet is a protocol-shape or network mismatch.**
+
+**AND RESTART THE WALLET BETWEEN FAILED RUNS.** After roughly six failed associations the Seed Vault wallet
+began closing the session ~50 ms after launch (`mobile-wallet-adapter session closed`) and never connected
+back to the local socket at all, giving `Failed establishing a WebSocket connection`. Swiping it from recents
+cleared it every time. **A wallet that has been left holding half-dead sessions is not a clean test
+subject** -- and several of the eight "controlled" runs above were taken against one.
+
 
 ## Errors
 
