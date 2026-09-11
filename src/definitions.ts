@@ -33,8 +33,20 @@ export interface AuthorizeAndSignOptions {
   minContextSlot?: number;
 
   /**
-   * How long to wait for the wallet to associate, in milliseconds.
-   * Defaults to 20000. This is the ASSOCIATION timeout, not a signing deadline.
+   * A DEADLINE FOR THE WHOLE INTERACTION, in milliseconds. Defaults to 90000.
+   *
+   * It spans association, authorize and sign together rather than applying to each:
+   * three separate timeouts would let a wallet occupy the plugin's single worker for
+   * `3 x timeoutMs` while appearing to honour the value you passed.
+   *
+   * IT INCLUDES HUMAN TIME. A wallet may show a chooser, a security warning, an
+   * account picker and a biometric prompt before the user ever reaches the approval,
+   * so this is a budget for a person rather than for a machine. An earlier default of
+   * 20000 expired while a user was still reading Phantom's "could not be verified"
+   * warning, which is why it is no longer that.
+   *
+   * Exceeding it yields `ASSOCIATION_TIMEOUT`, or `DECLINED` if the user had already
+   * backed out of the wallet.
    */
   timeoutMs?: number;
 }

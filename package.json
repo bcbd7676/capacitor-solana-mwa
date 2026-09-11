@@ -28,6 +28,7 @@
     }
   },
   "scripts": {
+    "prepare": "npm run build",
     "build": "npm run clean && tsc && npm run build:cjs",
     "clean": "rimraf ./dist",
     "verify:android": "cd android && ./gradlew clean build test && cd ..",
