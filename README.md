@@ -211,6 +211,10 @@ nothing. There is no prompt, nothing to tap, and the request expires at the 90s 
 | wallet not on the requested cluster | reproduced with the wallet explicitly in devnet mode |
 | screenshot protection hiding a real sheet | Phantom blanks captures via `FLAG_SECURE`; Seed Vault's did not — the dApp was visible underneath, so the sheet was genuinely empty |
 
+**>>> ONE HYPOTHESIS IS NOT YET RULED OUT, AND IT IS THE OBVIOUS ONE TO TEST NEXT: EVERY RUN ABOVE USED AN ACCOUNT HOLDING ZERO DEVNET SOL. <<<** Whether the sheet renders for a *funded* account on the requested cluster is untested — the devnet faucets cap at 1 SOL per project per day and were exhausted. A consent sheet arguably should not care about balance, but five of the six explanations above were also things that "obviously" should not have mattered, and each took a controlled run to kill. **Until that run happens, treat this section as a strong provisional finding rather than a settled one, and do not report it upstream as settled.**
+
+**A second gap in the same test: the account Seed Vault actually holds was never confirmed.** The fee-payer field was set from an address on record for the handset, and the mismatch assertion that would have revealed the true address never fired, because the flow never reached it. Funding the wrong address would produce a meaningless negative, so read the address out of the wallet before funding it.
+
 **The control is the valuable half.** The *same APK*, on the *same device*, in the *same session*, drives
 Phantom 26.6.0 to a rendered sheet and to real protocol-level replies — `-3/sign request declined` and a
 `CancellationException`, which this plugin maps to `SIGN_FAILED` and `DECLINED` respectively. So the
