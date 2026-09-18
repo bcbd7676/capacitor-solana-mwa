@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Solana Mobile Wallet Adapter for Capacitor. Native transport, so it needs no cleartext-traffic exemption -- unlike the JS MWA libraries, which cannot connect from a Capacitor WebView without one.",
   "license": "MIT",
+  "author": "Wollammo Productions <arkaseeker1@gmail.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bcbd7676/capacitor-solana-mwa.git"
