@@ -189,7 +189,9 @@ Each round trip is a 1-lamport self-transfer, finalized with no error and signed
 | Seeker wallet 1.20.0 | Seeker, Android 16 | 2.0 | `chain`: `solana:mainnet` | 27,000 | adds compute-budget and `L2TExMFK…` instructions | [`4FRQeYhJ…7k8ok`](https://explorer.solana.com/tx/4FRQeYhJ857Py1tDkhh6QckiDHZ9dyrtS5qZRkotwNxLahj7NDUbpMzyaiaWVi12EhAomCbbe9q4eyDRuCA7k8ok) | pass |
 | Jupiter 3.24.0 | Seeker, Android 16 | 2.0 | `chain`: `solana:mainnet` | 5,000 | none | [`5bkhW3PA…4HUG`](https://explorer.solana.com/tx/5bkhW3PACGjak9QXaebeaLZqGADfxBJf3zXFFVLn9wGVmLDYQdRx5CqjkEs1R379Y9zKDPShpFKhBReQYMCV4HUG) | pass |
 
-**Known gaps in these runs.** The `devnet` mapping for legacy sessions has not been re-run on Phantom since 0.1.0 sent `solana:devnet` there. Before starting fresh, Phantom's attempts on the Seeker ended in timeouts, cancellations and one prompt that never appeared, and the cause was not established. Swiping Phantom from recents and retrying worked on the first try. Also, Phantom's Confirm button can sit below the visible part of its sheet, so a tester may need to scroll inside the sheet.
+**The 0.1.1 re-test.** The new `devnet` mapping was re-run on Phantom 26.36.0 on a Galaxy S10 ([`4GgPiTeE…mTYk2A`](https://explorer.solana.com/tx/4GgPiTeE69VnMCJZVSxcFJK9K89j1GJFBhorgNsYPuCMu6pVvUuodteyTf8RPc2WwTp3CJiQnUciNGd8NimTYk2A?cluster=devnet)), followed by a mainnet run on the same phone ([`2iVMXgHn…wLrU`](https://explorer.solana.com/tx/2iVMXgHnd5JVA5FWGcQD9op3MVjdBayEjmJnFUQdkMNN2g1ZCcTcPDKUg8pmnGpF7Lb9VZiLZJKh23jzQKPpwLrU)). In both, the example app's chain check and an independent read from the chain agreed.
+
+**Known gaps in these runs.** Before starting fresh, Phantom's attempts on the Seeker ended in timeouts, cancellations and one prompt that never appeared, and the cause was not established. Swiping Phantom from recents and retrying worked on the first try. Also, Phantom's Confirm button can sit below the visible part of its sheet, so a tester may need to scroll inside the sheet.
 
 ### Devnet, Sep 2026 (0.1.0)
 
