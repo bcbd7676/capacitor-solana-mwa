@@ -1,6 +1,6 @@
 {
   "name": "capacitor-solana-mwa",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Solana Mobile Wallet Adapter for Capacitor. Native transport, so it needs no cleartext-traffic exemption -- unlike the JS MWA libraries, which cannot connect from a Capacitor WebView without one.",
   "license": "MIT",
   "author": "Wollammo Productions <arkaseeker1@gmail.com>",
@@ -20,6 +20,7 @@
     "android/build.gradle",
     "dist/",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "keywords": [
@@ -29,6 +30,7 @@
     "mwa",
     "seed-vault",
     "solana-mobile",
+    "seeker",
     "android"
   ],
   "capacitor": {
@@ -39,6 +41,7 @@
   "scripts": {
     "prepare": "npm run build",
     "build": "npm run clean && tsc && npm run build:cjs",
+    "test": "npm run build && node --test test/web.test.mjs",
     "clean": "rimraf ./dist",
     "verify:android": "cd android && ./gradlew clean build test && cd ..",
     "build:cjs": "esbuild src/index.ts --bundle --format=cjs --platform=neutral --external:@capacitor/core --outfile=dist/plugin.cjs.js"

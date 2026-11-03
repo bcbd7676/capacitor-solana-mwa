@@ -43,4 +43,6 @@ dependencies {
     // the entire transport, and a missing one compiles fine then NoClassDefFoundErrors
     // on the first association. Verify with :dependencies --configuration runtimeClasspath.
     implementation 'com.solanamobile:mobile-wallet-adapter-clientlib:2.1.0'
+
+    testImplementation 'junit:junit:4.13.2'
 }

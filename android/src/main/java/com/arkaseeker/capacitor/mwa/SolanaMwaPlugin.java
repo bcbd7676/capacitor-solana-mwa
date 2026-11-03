@@ -388,13 +388,12 @@ public class SolanaMwaPlugin extends Plugin {
         }
 
         if (walletSpeaksV2) {
-            // `cluster` and `chain` carry the same identifiers ("solana:devnet"), so the
-            // caller's value needs no translation -- only the parameter it lands in.
+            // A 2.0 session takes the caller's chain identifier ("solana:mainnet") as it is.
             return client.authorize(idUri, iconUri, identityName, cluster,
                     null /* authToken */, null /* features */, null /* addresses */,
                     null /* signInPayload */).get(remaining(deadline), TimeUnit.NANOSECONDS);
         }
-        return client.authorize(idUri, iconUri, identityName, cluster)
+        return client.authorize(idUri, iconUri, identityName, MwaCluster.legacy(cluster))
                 .get(remaining(deadline), TimeUnit.NANOSECONDS);
     }
 
