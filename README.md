@@ -2,9 +2,9 @@
 
 Solana [Mobile Wallet Adapter](https://docs.solanamobile.com/) for [Capacitor](https://capacitorjs.com/) apps on Android.
 
-> **Status: pre-release (0.1.0). Device-proven.** A full `authorize` + `signAndSendTransactions` round trip has been completed against Phantom on a Samsung Galaxy S10 (Android 12), devnet, Sep 10 2026 — transaction [`3G3SqCPG…kKzvCp`](https://explorer.solana.com/tx/3G3SqCPGVU4YT16S4HR2AD3bUYVUMdMCvsxJsK4612wp2UjSJfXLFdVgC5fgyddSMAi9DZBSwkmCJtWXV9kKzvCp?cluster=devnet), finalized, `err: null`, confirmed by `getSignatureStatuses` rather than by the app's own report.
+> **Status: pre-release (0.1.1). Proven on mainnet on real devices.** Full `authorize` + `signAndSendTransactions` round trips and `signMessages` calls were completed on mainnet on Nov 3 2026 with **Phantom** (Seeker / Android 16 and Galaxy S10 / Android 12), the **Seeker wallet** and **Jupiter** (both Seeker / Android 16). Each transaction was read back from the chain, and each message signature was verified against the wallet's public key. See [Wallet compatibility](#wallet-compatibility).
 >
-> **What that does and does not cover.** Devnet only, and there is no test suite. **Phantom passes on two handsets** (Galaxy S10 / Android 12, and Seeker / Android 16) and **Seed Vault wallet 1.16.0 passes on a Seeker** — three round trips, each signature verified on chain rather than from the client's claim of success. **THE TWO WALLETS NEED DIFFERENT AUTHORIZE REQUESTS: Phantom falls back to a legacy MWA 1.x session and Seed Vault negotiates 2.0, and the client library sends whichever overload you call regardless.** This plugin therefore asks the wallet what it is, via `get_capabilities`, before it asks it for anything — see [Wallet compatibility](#wallet-compatibility), which also records the earlier version of this line reporting Seed Vault as broken when the fault was ours. **MWA's whole point is that the wallet is pluggable, so a pass on one is not a pass on another.** Treat the plugin as working-but-young, and do not put it on a money path without testing the path you actually use.
+> **What that does and does not cover.** The automated tests cover the network mapping, Base58 and the web fallback, and they cannot exercise a real wallet, so wallet behaviour is still only proven by these manual runs. Mainnet was tested with 1-lamport self-transfers, not larger payments or real program calls, and no production app has been shown to use the plugin. **MWA's whole point is that the wallet is pluggable, so a pass on one is not a pass on another.** Treat the plugin as working-but-young, and do not put it on a money path without testing the path you actually use.
 
 ## Why this exists
 
@@ -57,6 +57,14 @@ const { address, signatures } = await SolanaMwa.authorizeAndSignAndSend({
 });
 // address and signatures are base58. Base64 in, base58 out.
 ```
+
+### A signature does not prove the transaction landed
+
+Check the chain, for example with `getSignatureStatuses`, before treating a payment as done. In testing, Jupiter returned a signature for a devnet request from a wallet holding no devnet SOL, and that transaction never appeared on devnet or mainnet.
+
+### The wallet may change your transaction
+
+Wallets can add instructions before signing, so the signed transaction may differ from the one you built, and the fee may be higher than the base fee. In the Nov 3 2026 runs, Phantom and the Seeker wallet each added two compute-budget instructions and one call to `L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95`, while Jupiter sent the transaction unchanged. If you need an exact fee or an exact instruction list, test with the wallets your users have.
 
 ### `walletAvailable()` answers "is there a wallet", not "is this a Solana phone"
 
@@ -170,6 +178,21 @@ example declares the placeholder `https://example.com`, which hosts no associati
 Measured on hardware, not inferred. Every row is a real run against a real wallet, and every signature below
 was verified by reading the transaction back from the cluster rather than trusting the client.
 
+### Mainnet, Nov 3 2026
+
+Each round trip is a 1-lamport self-transfer, finalized with no error and signed only by the expected account. Each `signMessages` signature was verified with ed25519 against the wallet's public key, with a tampered message and a wrong key both rejected.
+
+| wallet | device | session | network field sent | fee (lamports) | changes the wallet made | round trip | signMessages |
+| --- | --- | --- | --- | ---: | --- | --- | --- |
+| Phantom 26.36.0 | Seeker, Android 16 | legacy | `cluster`: `mainnet-beta` | 80,000 | adds compute-budget and `L2TExMFK…` instructions | [`4Vn6QKnH…gUC8R`](https://explorer.solana.com/tx/4Vn6QKnHashyTGgUEFmCRvvXAJV3BqVWVngM3LtXS2tDuzTZw6H4kZFHHKgdWoyNf5CCoETdy1BbwBYHDRWgUC8R) | pass |
+| Phantom 26.36.0 | Galaxy S10, Android 12 | legacy | `cluster`: `mainnet-beta` | 80,000 | adds compute-budget and `L2TExMFK…` instructions | [`57JWEkZ7…iosEC`](https://explorer.solana.com/tx/57JWEkZ7b5NbHtonDQbLWMGbZjjbEKUi5wthUnKLv572GmTx4psBqL5paXZgfnXvcb2zYHYTQTQMHMS7MayiosEC) | pass |
+| Seeker wallet 1.20.0 | Seeker, Android 16 | 2.0 | `chain`: `solana:mainnet` | 27,000 | adds compute-budget and `L2TExMFK…` instructions | [`4FRQeYhJ…7k8ok`](https://explorer.solana.com/tx/4FRQeYhJ857Py1tDkhh6QckiDHZ9dyrtS5qZRkotwNxLahj7NDUbpMzyaiaWVi12EhAomCbbe9q4eyDRuCA7k8ok) | pass |
+| Jupiter 3.24.0 | Seeker, Android 16 | 2.0 | `chain`: `solana:mainnet` | 5,000 | none | [`5bkhW3PA…4HUG`](https://explorer.solana.com/tx/5bkhW3PACGjak9QXaebeaLZqGADfxBJf3zXFFVLn9wGVmLDYQdRx5CqjkEs1R379Y9zKDPShpFKhBReQYMCV4HUG) | pass |
+
+**Known gaps in these runs.** The `devnet` mapping for legacy sessions has not been re-run on Phantom since 0.1.0 sent `solana:devnet` there. Before starting fresh, Phantom's attempts on the Seeker ended in timeouts, cancellations and one prompt that never appeared, and the cause was not established. Swiping Phantom from recents and retrying worked on the first try. Also, Phantom's Confirm button can sit below the visible part of its sheet, so a tester may need to scroll inside the sheet.
+
+### Devnet, Sep 2026 (0.1.0)
+
 | wallet | device | session | authorize shape it needs | round trip |
 | --- | --- | --- | --- | --- |
 | Phantom 26.6.0 | Galaxy S10, Android 12 | legacy | 1.x (`cluster`) | yes — `3G3SqCPG…kKzvCp` (predates the negotiation change) |
@@ -228,6 +251,10 @@ It cost a real regression, and the symptom is worth knowing because it names the
 the 2.0 request, which carries `chain` and no `cluster`, so it saw no network at all and defaulted to
 mainnet** -- surfacing to the user as *"this app is trying to use mainnet, but you are in testnet mode"*. A
 network error, from a protocol-version bug.
+
+### A legacy session needs a legacy network name
+
+The library defines two separate sets of names: 1.x cluster names such as `mainnet-beta`, and 2.0 chain identifiers such as `solana:mainnet`. Version 0.1.0 passed the chain identifier into the 1.x `cluster` field, so Phantom refused mainnet with *"example.com is trying to use testnet mode"*. Devnet never exposed it, as Phantom was already in testnet mode for those runs. Since 0.1.1 the plugin translates it, and callers still pass `solana:mainnet`.
 
 ### Two gotchas that cost an evening each
 
