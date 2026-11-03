@@ -9,6 +9,9 @@
   input { width: 100%; box-sizing: border-box; padding: 9px; margin-bottom: 8px;
           background: #141c26; color: #d8e2ec; border: 1px solid #2a3947;
           border-radius: 5px; font-family: ui-monospace, monospace; font-size: 12px; }
+  select { width: 100%; box-sizing: border-box; padding: 9px; margin-bottom: 8px;
+           background: #141c26; color: #d8e2ec; border: 1px solid #2a3947; border-radius: 5px; font-size: 13px; }
+  p.warn { color: #fbbf24; font-weight: 600; }
   button { width: 100%; padding: 11px; margin-bottom: 8px; border: 0; border-radius: 5px;
            background: #1e3a8a; color: #eaf2ff; font-size: 14px; font-weight: 600; }
   button.primary { background: #047857; }
@@ -22,11 +25,15 @@
 </style>
 
 <h1>capacitor-solana-mwa example</h1>
-<p class="sub">Devnet. Signs a 1-lamport self-transfer, so nothing of value moves.</p>
+<p class="sub" id="network-note">Devnet. Signs a 1-lamport self-transfer, so nothing of value moves.</p>
 
-<input id="rpc" placeholder="RPC endpoint (the public devnet one blocks localhost origins)"
+<select id="network" aria-label="Network">
+  <option value="devnet" selected>Devnet</option>
+  <option value="mainnet">Mainnet (real SOL)</option>
+</select>
+<input id="rpc" placeholder="RPC endpoint (public endpoints may block localhost origins)"
        autocapitalize="off" autocorrect="off" spellcheck="false">
-<input id="expected" placeholder="Throwaway wallet address (fee payer + safety check)"
+<input id="expected" placeholder="Wallet address to test with (fee payer + safety check)"
        autocapitalize="off" autocorrect="off" spellcheck="false">
 
 <button id="btn-check">1. Check for a wallet</button>
